@@ -497,35 +497,43 @@ abstract class InputHandlerGeneric extends MyGestureDectector.SimpleOnGestureLis
             return;
         }
 
-        if (longPressType.equals("left")) {
-            dragMode = true;
-        } else if (longPressType.equals("middle")) {
-            middleDragMode = true;
-        } else if (longPressType.equals("right")){
-            rightDragMode = true;
-        } else if (longPressType.equals("gesture")) {
-            // Here we mock a ACTION_DOWN event for gestureOverlayView to transmit the touch events to it flawlessly
-            // further touch events will be transmitted in method onTouchEvent.
-            GestureOverlayView gestureOverlay = activity.findViewById(R.id.gestureOverlay);
-            gestureOverlay.setVisibility(View.VISIBLE);
+        int x = (int) (canvas.getAbsX() - canvas.getBlackBorderWidth() + (e.getX()) / canvas.getZoomFactor());
+        int y = (int) (canvas.getAbsY() + (e.getY()) / canvas.getZoomFactor());
+        
+        switch (longPressType) {
+            case "left":
+                pointer.leftButtonDown(x, y, 0);
+                SystemClock.sleep(50);
+                pointer.releaseButton(x, y, 0);
+                pointer.moveMouse(x, y, 0);
+                break;
+            case "middle":
+                middleDragMode = true;
+                break;
+            case "right":
+                rightDragMode = true;
+                break;
+            case "gesture":
+                // Here we mock a ACTION_DOWN event for gestureOverlayView to transmit the touch events to it flawlessly
+                // further touch events will be transmitted in method onTouchEvent.
+                GestureOverlayView gestureOverlay = activity.findViewById(R.id.gestureOverlay);
+                gestureOverlay.setVisibility(View.VISIBLE);
 
-            activity.sendShortVibration();
+                activity.sendShortVibration();
 
-            float x = e.getX();
-            float y = e.getY();
-
-            // 生成并分发模拟事件
-            MotionEvent downEvent = MotionEvent.obtain(
-                    SystemClock.uptimeMillis(),
-                    SystemClock.uptimeMillis(),
-                    MotionEvent.ACTION_DOWN,
-                    x,
-                    y,
-                    0
-            );
-            gestureOverlay.dispatchTouchEvent(downEvent);
-            downEvent.recycle();
-        }  // else do nothing
+                // 生成并分发模拟事件
+                MotionEvent downEvent = MotionEvent.obtain(
+                        SystemClock.uptimeMillis(),
+                        SystemClock.uptimeMillis(),
+                        MotionEvent.ACTION_DOWN,
+                        e.getX(),
+                        e.getY(),
+                        0
+                );
+                gestureOverlay.dispatchTouchEvent(downEvent);
+                downEvent.recycle();
+                break;
+        }
 
         activity.sendShortVibration();
     }

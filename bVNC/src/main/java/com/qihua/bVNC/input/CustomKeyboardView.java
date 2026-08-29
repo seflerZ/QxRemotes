@@ -136,15 +136,17 @@ public class CustomKeyboardView extends ViewGroup {
     static {
         KeyDef z = kd('z'), x = kd('x'), c = kd('c'), v = kd('v'), b = kd('b'), n = kd('n'), m = kd('m');
         KeyDef[] r0 = {kd('q', '1'), kd('w', '2'), kd('e', '3'), kd('r', '4'), kd('t', '5'),
+                kd('y', '6'), kd('u', '7'), kd('i', '8'), kd('o', '9'), kd('p', '0'), BKSP};
+        KeyDef[] r0split = {kd('q', '1'), kd('w', '2'), kd('e', '3'), kd('r', '4'), kd('t', '5'),
                 Y_LEFT, kd('y', '6'), kd('u', '7'), kd('i', '8'), kd('o', '9'), kd('p', '0'), BKSP};
         KeyDef[] r1 = {kd('a'), kd('s'), kd('d'), kd('f'), kd('g'), kd('h'), kd('j'), kd('k'), kd('l'), ENTER};
-        KeyDef[] r2 = {z, x, c, v, b, n, m, QUESTION, SHIFT};
+        KeyDef[] r2 = {z, x, c, v, b, n, m, QUESTION, HYPHEN, SHIFT};
         KeyDef[] r2split = {z, x, c, v, b, B_RIGHT, n, m, QUESTION, HYPHEN, SHIFT};
         KeyDef[] r3flat = {DOT, COMMA, SPACE_FLAT, SEMI, APOSTROPHE};
         KeyDef[] r3split = {WAVE, DOT, COMMA, SPACE_L, SPACE_R, BRACKET, SEMI, APOSTROPHE};
         ROWS_FLAT = new Row[]{new Row(r0, 0, r0.length), new Row(r1, STAGGER_ROW1, r1.length),
                 new Row(r2, STAGGER_ROW2, r2.length), new Row(r3flat, 0, r3flat.length)};
-        ROWS_SPLIT = new Row[]{new Row(r0, 0, 6), new Row(r1, STAGGER_ROW1, 5),
+        ROWS_SPLIT = new Row[]{new Row(r0split, 0, 6), new Row(r1, STAGGER_ROW1, 5),
                 new Row(r2split, STAGGER_ROW2, 5), new Row(r3split, 0, 4)};
     }
 

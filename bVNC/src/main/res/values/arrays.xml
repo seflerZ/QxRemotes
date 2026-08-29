@@ -40,9 +40,9 @@
     <string name="pref_three_pointer_touch_value_middle">middle</string>
     <string name="pref_three_pointer_touch_value_gesture">gesture</string>
 
-    <string name="pref_longpress_type_left">Left Button</string>
-    <string name="pref_longpress_type_middle">Middle Button</string>
-    <string name="pref_longpress_type_right">Right Button</string>
+    <string name="pref_longpress_type_left">Click &amp; Move Mouse</string>
+    <string name="pref_longpress_type_middle">Middle Button Drag</string>
+    <string name="pref_longpress_type_right">Right Button Drag</string>
     <string name="pref_longpress_type_gesture">Activate Gesture</string>
     <string name="pref_longpress_type_none">Disabled</string>
 
