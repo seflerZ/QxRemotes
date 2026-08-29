@@ -1182,11 +1182,14 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
         customKeyboardView.setOnKeyAction(new CustomKeyboardView.OnKeyAction() {
             @Override
             public void onKeyboardText(char c, int extraMeta) {
+                // Sync extra-keys latches into keyboard meta and one-shot release them, same as onKey().
+                readSpecialKeysState();
                 canvas.getKeyboard().sendUnicode(c, canvas.getKeyboard().getMetaState() | extraMeta);
             }
 
             @Override
             public void onKeyboardSpecialKey(int keyCode, int extraMeta) {
+                readSpecialKeysState();
                 canvas.getKeyboard().keyEvent(keyCode, new KeyEvent(0, 0, KeyEvent.ACTION_DOWN, keyCode, 0, extraMeta));
                 canvas.getKeyboard().keyEvent(keyCode, new KeyEvent(0, 0, KeyEvent.ACTION_UP, keyCode, 0, extraMeta));
             }
