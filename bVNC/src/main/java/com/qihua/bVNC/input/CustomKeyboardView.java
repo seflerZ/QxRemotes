@@ -66,20 +66,26 @@ public class CustomKeyboardView extends ViewGroup {
         final String labelShort; // shown when the key is too narrow for label
         final char text;     // 0 for special keys
         final int keyCode;   // 0 for text keys
-        final char swipe;    // swipe-up char (row-0 digits, punctuation pairs), 0 for none
+        final char swipe;      // swipe-up char (row-0 digits, punctuation pairs), 0 for none
+        final char swipeDown;  // swipe-down char, 0 for none
         final float weightFlat;
         final float weightSplit;
 
         KeyDef(String label, char text, int keyCode, char swipe, float weightFlat, float weightSplit) {
-            this(label, label, text, keyCode, swipe, weightFlat, weightSplit);
+            this(label, label, text, keyCode, swipe, (char) 0, weightFlat, weightSplit);
         }
 
         KeyDef(String label, String labelShort, char text, int keyCode, char swipe, float weightFlat, float weightSplit) {
+            this(label, labelShort, text, keyCode, swipe, (char) 0, weightFlat, weightSplit);
+        }
+
+        KeyDef(String label, String labelShort, char text, int keyCode, char swipe, char swipeDown, float weightFlat, float weightSplit) {
             this.label = label;
             this.labelShort = labelShort;
             this.text = text;
             this.keyCode = keyCode;
             this.swipe = swipe;
+            this.swipeDown = swipeDown;
             this.weightFlat = weightFlat;
             this.weightSplit = weightSplit;
         }
@@ -91,6 +97,10 @@ public class CustomKeyboardView extends ViewGroup {
 
     private static KeyDef kd(char c, char swipe) {
         return new KeyDef(String.valueOf(c), c, 0, swipe, 1f, 1f);
+    }
+
+    private static KeyDef kd(char c, char swipe, char swipeDown) {
+        return new KeyDef(String.valueOf(c), String.valueOf(c), c, 0, swipe, swipeDown, 1f, 1f);
     }
 
     private static KeyDef kd(char c, char swipe, float weightFlat, float weightSplit) {
@@ -120,30 +130,33 @@ public class CustomKeyboardView extends ViewGroup {
     private static final KeyDef COMMA = kd(',', '<');
     private static final KeyDef DOT = kd('.', '>');
     private static final KeyDef SEMI = kd(';', ':');
-    private static final KeyDef QUESTION = kd('?', '!');
+    private static final KeyDef QUESTION = kd('?', '/');
     private static final KeyDef HYPHEN = kd('-', '_');
     private static final KeyDef WAVE = kd('`', '~');
     private static final KeyDef APOSTROPHE = kd('\'', '"');
     /** Split row 2 puts b on both halves — either thumb may hit it. */
     private static final KeyDef B_RIGHT = kd('b');
-    private static final KeyDef Y_LEFT = kd('y', '6');
+    /** Split row 0 duplicates y so either thumb can hit it; mirrors the regular y's swipes. */
+    private static final KeyDef Y_LEFT = kd('y', '6', '^');
 
-    private static final KeyDef BRACKET = kd('（', ')');
+    private static final KeyDef SLASH = kd('\\', '|');
 
     private static final Row[] ROWS_FLAT;
     private static final Row[] ROWS_SPLIT;
 
     static {
+        KeyDef q = kd('q', '1', '!'), w = kd('w', '2', '@'), e = kd('e', '3', '#'),
+                r = kd('r', '4', '$'), t = kd('t', '5', '%'), y = kd('y', '6', '^'),
+                u = kd('u', '7', '&'), i = kd('i', '8', '*'), o = kd('o', '9', '('),
+                p = kd('p', '0', ')');
         KeyDef z = kd('z'), x = kd('x'), c = kd('c'), v = kd('v'), b = kd('b'), n = kd('n'), m = kd('m');
-        KeyDef[] r0 = {kd('q', '1'), kd('w', '2'), kd('e', '3'), kd('r', '4'), kd('t', '5'),
-                kd('y', '6'), kd('u', '7'), kd('i', '8'), kd('o', '9'), kd('p', '0'), BKSP};
-        KeyDef[] r0split = {kd('q', '1'), kd('w', '2'), kd('e', '3'), kd('r', '4'), kd('t', '5'),
-                Y_LEFT, kd('y', '6'), kd('u', '7'), kd('i', '8'), kd('o', '9'), kd('p', '0'), BKSP};
+        KeyDef[] r0 = {q, w, e, r, t, y, u, i, o, p, BKSP};
+        KeyDef[] r0split = {q, w, e, r, t, Y_LEFT, y, u, i, o, p, BKSP};
         KeyDef[] r1 = {kd('a'), kd('s'), kd('d'), kd('f'), kd('g'), kd('h'), kd('j'), kd('k'), kd('l'), ENTER};
         KeyDef[] r2 = {z, x, c, v, b, n, m, QUESTION, HYPHEN, SHIFT};
         KeyDef[] r2split = {z, x, c, v, b, B_RIGHT, n, m, QUESTION, HYPHEN, SHIFT};
         KeyDef[] r3flat = {DOT, COMMA, SPACE_FLAT, SEMI, APOSTROPHE};
-        KeyDef[] r3split = {WAVE, DOT, COMMA, SPACE_L, SPACE_R, BRACKET, SEMI, APOSTROPHE};
+        KeyDef[] r3split = {WAVE, DOT, COMMA, SPACE_L, SPACE_R, SLASH, SEMI, APOSTROPHE};
         ROWS_FLAT = new Row[]{new Row(r0, 0, r0.length), new Row(r1, STAGGER_ROW1, r1.length),
                 new Row(r2, STAGGER_ROW2, r2.length), new Row(r3flat, 0, r3flat.length)};
         ROWS_SPLIT = new Row[]{new Row(r0split, 0, 6), new Row(r1, STAGGER_ROW1, 5),
@@ -163,6 +176,8 @@ public class CustomKeyboardView extends ViewGroup {
 
     private OnKeyAction keyAction;
     private PopupWindow popupWindow;
+    /** Which char the popup is showing (def.swipe for up, def.swipeDown for down); 0 if none. */
+    private char popupChar;
     private ScheduledExecutorService repeatExecutor;
     private int longPressCount;
 
@@ -375,9 +390,9 @@ public class CustomKeyboardView extends ViewGroup {
         }
     }
 
-    private void showPopup(KeyButton btn) {
+    private void showPopup(KeyButton btn, char c, int yOffset) {
         MaterialButton popup = new MaterialButton(getContext(), null, android.R.attr.buttonBarButtonStyle);
-        popup.setText(String.valueOf(btn.def.swipe));
+        popup.setText(String.valueOf(c));
         popup.setTextColor(colorText);
         popup.setBackgroundColor(colorBgActive);
         popup.setPadding(0, 0, 0, 0);
@@ -393,10 +408,11 @@ public class CustomKeyboardView extends ViewGroup {
         popupWindow.setContentView(popup);
         popupWindow.setOutsideTouchable(true);
         popupWindow.setFocusable(false);
-        popupWindow.showAsDropDown(btn, 0, -2 * btn.getMeasuredHeight());
+        popupWindow.showAsDropDown(btn, 0, yOffset);
     }
 
     private void dismissPopup() {
+        popupChar = 0;
         if (popupWindow != null) {
             popupWindow.setContentView(null);
             popupWindow.dismiss();
@@ -417,16 +433,21 @@ public class CustomKeyboardView extends ViewGroup {
                 return true;
 
             case MotionEvent.ACTION_MOVE:
-                if (def.swipe != 0) {
-                    if (popupWindow == null && event.getY() < 0) {
+                boolean wantsUp = def.swipe != 0 && event.getY() < 0;
+                boolean wantsDown = def.swipeDown != 0 && event.getY() > v.getHeight();
+                if (wantsUp || wantsDown) {
+                    if (popupWindow == null) {
                         stopRepeat();
                         Utils.setKeyPressedFlash(v, false);
-                        showPopup(btn);
+                        popupChar = wantsDown ? def.swipeDown : def.swipe;
+                        // 向下弹出时方向反过来：showAsDropDown 的 yOffset 是相对 anchor 的偏移；
+                        // 上滑把弹窗放在键的上方（负偏移），下滑放在键的下方（正偏移）。
+                        int offset = wantsDown ? 0 : -2 * btn.getMeasuredHeight();
+                        showPopup(btn, popupChar, offset);
                     }
-                    if (popupWindow != null && event.getY() > 0) {
-                        Utils.setKeyPressedFlash(v, true);
-                        dismissPopup();
-                    }
+                } else if (popupWindow != null) {
+                    Utils.setKeyPressedFlash(v, true);
+                    dismissPopup();
                 }
                 return true;
 
@@ -434,8 +455,9 @@ public class CustomKeyboardView extends ViewGroup {
                 Utils.setKeyPressedFlash(v, false);
                 stopRepeat();
                 if (popupWindow != null) {
+                    char c = popupChar;
                     dismissPopup();
-                    sendText(def.swipe);
+                    sendText(c);
                 } else if (longPressCount == 0) {
                     sendKey(def);
                 }
@@ -503,6 +525,12 @@ public class CustomKeyboardView extends ViewGroup {
                 float padX = getWidth() * 0.12f;
                 canvas.drawText(s, getWidth() - cornerPaint.measureText(s) - padX,
                         getHeight() * 0.08f + cornerPaint.getTextSize(), cornerPaint);
+            }
+            if (def.swipeDown != 0) {
+                cornerPaint.setTextSize(getTextSize() * 0.5f);
+                String s = String.valueOf(def.swipeDown);
+                float padX = getWidth() * 0.12f;
+                canvas.drawText(s, padX, getHeight() * 0.92f, cornerPaint);
             }
         }
     }

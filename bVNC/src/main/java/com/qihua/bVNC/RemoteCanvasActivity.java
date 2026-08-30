@@ -135,12 +135,14 @@ import java.io.IOException;
 import java.net.URL;
 import java.net.URLConnection;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyListener, OnGenericMotionListener, GameGestures {
     public static final int[] inputModeIds = {R.id.itemInputTouchpad, R.id.itemInputDirectTouch, R.id.itemInputGamepad};
@@ -576,7 +578,7 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
         extraKeysView.setExtraKeysViewClient(new ExtraKeysView.IExtraKeysView() {
             @Override
             public void onExtraKeyButtonClick(View view, ExtraKeyButton buttonInfo, MaterialButton button) {
-                performShortKeys(Collections.singletonList(buttonInfo.getKey()));
+                performShortKeys(Arrays.stream(buttonInfo.getKey().split(",")).collect(Collectors.toList()));
 //                sendShortVibration();
             }
 
@@ -728,10 +730,13 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
         } else if (keys.contains("PGDN")) {
             canvas.getKeyboard().keyEvent(KeyEvent.KEYCODE_PAGE_DOWN, new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_PAGE_DOWN));
             canvas.getKeyboard().keyEvent(KeyEvent.KEYCODE_PAGE_DOWN, new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_PAGE_DOWN));
+        } else if (keys.contains("INS")) {
+            canvas.getKeyboard().keyEvent(KeyEvent.KEYCODE_INSERT, new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_INSERT));
+            canvas.getKeyboard().keyEvent(KeyEvent.KEYCODE_INSERT, new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_INSERT));
         } else if (keys.contains("HOME")) {
             canvas.getKeyboard().keyEvent(KeyEvent.KEYCODE_MOVE_HOME, new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MOVE_HOME));
             canvas.getKeyboard().keyEvent(KeyEvent.KEYCODE_MOVE_HOME, new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MOVE_HOME));
-        }  else if (keys.contains("END")) {
+        } else if (keys.contains("END")) {
             canvas.getKeyboard().keyEvent(KeyEvent.KEYCODE_MOVE_END, new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MOVE_END));
             canvas.getKeyboard().keyEvent(KeyEvent.KEYCODE_MOVE_END, new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MOVE_END));
         } else if (keys.contains("FUNC")) {
