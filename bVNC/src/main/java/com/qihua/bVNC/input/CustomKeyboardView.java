@@ -57,6 +57,7 @@ public class CustomKeyboardView extends ViewGroup {
     private static final float SPLIT_HALF_UNITS = 6f;
     private static final float STAGGER_ROW1 = 0.35f;
     private static final float STAGGER_ROW2 = 0.75f;
+    private static final float STAGGER_ROW3 = 1f;
     private static final long REPEAT_INITIAL_MS = 400;
     private static final long REPEAT_DELAY_MS = 20;
 
@@ -125,7 +126,7 @@ public class CustomKeyboardView extends ViewGroup {
     private static final KeyDef SPACE_R = new KeyDef("SPACE", (char) 0, KeyEvent.KEYCODE_SPACE, (char) 0, 0f, -1f);
     private static final KeyDef ENTER = new KeyDef("ENTER ⏎", "⏎", (char) 0, KeyEvent.KEYCODE_ENTER, (char) 0, -1f, 2f);
     /** Right shift latch: one-shot; the latch also sends R-SHIFT down/up to the remote. */
-    private static final KeyDef SHIFT = new KeyDef("SHIFT", (char) 0, KeyEvent.KEYCODE_SHIFT_RIGHT, (char) 0, -1f, 1.25f);
+    private static final KeyDef SHIFT = new KeyDef("SHIFT", (char) 0, KeyEvent.KEYCODE_SHIFT_RIGHT, (char) 0, -1f, 1.5f);
     // Punctuation swipe-ups mirror the physical keyboard's Shift pairs (?/ is flipped: ? is the face).
     private static final KeyDef COMMA = kd(',', '<');
     private static final KeyDef DOT = kd('.', '>');
@@ -154,13 +155,13 @@ public class CustomKeyboardView extends ViewGroup {
         KeyDef[] r0split = {q, w, e, r, t, Y_LEFT, y, u, i, o, p, BKSP};
         KeyDef[] r1 = {kd('a'), kd('s'), kd('d'), kd('f'), kd('g'), kd('h'), kd('j'), kd('k'), kd('l'), ENTER};
         KeyDef[] r2 = {z, x, c, v, b, n, m, QUESTION, HYPHEN, SHIFT};
-        KeyDef[] r2split = {z, x, c, v, b, B_RIGHT, n, m, QUESTION, HYPHEN, SHIFT};
+        KeyDef[] r2split = {z, x, c, v, b, n, m, QUESTION, HYPHEN, SHIFT};
         KeyDef[] r3flat = {DOT, COMMA, SPACE_FLAT, SEMI, APOSTROPHE};
         KeyDef[] r3split = {WAVE, DOT, COMMA, SPACE_L, SPACE_R, SLASH, SEMI, APOSTROPHE};
         ROWS_FLAT = new Row[]{new Row(r0, 0, r0.length), new Row(r1, STAGGER_ROW1, r1.length),
                 new Row(r2, STAGGER_ROW2, r2.length), new Row(r3flat, 0, r3flat.length)};
         ROWS_SPLIT = new Row[]{new Row(r0split, 0, 6), new Row(r1, STAGGER_ROW1, 5),
-                new Row(r2split, STAGGER_ROW2, 5), new Row(r3split, 0, 4)};
+                new Row(r2split, STAGGER_ROW2, 5), new Row(r3split, STAGGER_ROW3, 4)};
     }
 
     private final List<KeyButton> buttons = new ArrayList<>();
@@ -257,7 +258,7 @@ public class CustomKeyboardView extends ViewGroup {
                 totalW += keyWidthPx(row.keys[i], split, unitW, flexRight);
             }
             // Stagger indents the group's inner (center-gap) edge only; the outer edge stays flush.
-            int rx = availW - totalW;
+            int rx = availW - staggerPx - totalW;
             for (int i = row.splitAfter; i < row.keys.length; i++) {
                 rx += place(row.keys[i], split, unitW, flexRight, rx, y, rowH);
             }

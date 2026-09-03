@@ -378,7 +378,12 @@ public final class ExtraKeysView extends GridLayout {
                 }
 
                 if (buttonInfo.getPopup() != null) button.hint = buttonInfo.getPopup().getDisplay();
-                button.setText(buttonInfo.getDisplay());
+                String display = buttonInfo.getDisplay();
+                if ("VOC".equals(display)) {
+                    button.showIcon(R.drawable.ic_mic_grey);
+                } else {
+                    button.setText(display);
+                }
                 button.setTextColor(mButtonTextColor);
                 button.setBackgroundColor(mButtonBackgroundColor);
                 button.setAllCaps(mButtonTextAllCaps);
@@ -617,15 +622,20 @@ public final class ExtraKeysView extends GridLayout {
     void showPopup(View view, ExtraKeyButton extraButton) {
         int width = view.getMeasuredWidth();
         int height = view.getMeasuredHeight();
-        MaterialButton button;
+        HintButton button;
         if (isSpecialButton(extraButton)) {
             button = createSpecialButton(extraButton.getKey(), false);
             if (button == null) return;
         } else {
-            button = new MaterialButton(getContext(), null, android.R.attr.buttonBarButtonStyle);
+            button = new HintButton(getContext());
             button.setTextColor(mButtonTextColor);
         }
-        button.setText(extraButton.getDisplay());
+        String popupDisplay = extraButton.getDisplay();
+        if ("VOC".equals(popupDisplay)) {
+            button.showIcon(R.drawable.ic_mic_grey);
+        } else {
+            button.setText(popupDisplay);
+        }
         button.setAllCaps(mButtonTextAllCaps);
         button.setPadding(0, 0, 0, 0);
         button.setMinHeight(0);
@@ -719,6 +729,7 @@ public final class ExtraKeysView extends GridLayout {
     /** Button that paints its swipe-up popup key as a small corner hint. */
     public class HintButton extends MaterialButton {
         String hint;
+        private android.graphics.drawable.Drawable iconDrawable;
         private final android.graphics.Paint hintPaint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
 
         HintButton(Context context) {
@@ -727,9 +738,26 @@ public final class ExtraKeysView extends GridLayout {
             hintPaint.setAlpha(180);
         }
 
+        /** Switch to icon-only mode: clears text and shows a centered, tinted drawable. */
+        void showIcon(@androidx.annotation.DrawableRes int resId) {
+            setText("");
+            setIcon(null); // don't let MaterialButton position the icon at start; we draw it centered
+            iconDrawable = androidx.core.content.ContextCompat.getDrawable(getContext(), resId);
+            if (iconDrawable != null) {
+                iconDrawable.setTint(mButtonTextColor);
+            }
+        }
+
         @Override
         protected void onDraw(android.graphics.Canvas canvas) {
             super.onDraw(canvas);
+            if (iconDrawable != null) {
+                int w = getWidth(), h = getHeight();
+                int s = (int) (Math.min(w, h) * 0.44f);
+                int l = (w - s) / 2, t = (h - s) / 2;
+                iconDrawable.setBounds(l, t, l + s, t + s);
+                iconDrawable.draw(canvas);
+            }
             if (hint == null || hint.isEmpty()) return;
             hintPaint.setTextSize(getTextSize() * 0.5f);
             float padX = getWidth() * 0.12f;
