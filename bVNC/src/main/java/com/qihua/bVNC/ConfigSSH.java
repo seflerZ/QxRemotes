@@ -66,6 +66,7 @@ public class ConfigSSH extends MainConfiguration {
     private EditText sshUser;
     private EditText sshPassword;
     private EditText sshPassphrase;
+    private EditText sshStartupCommand;
     private CheckBox checkboxKeepSshPass;
     private CheckBox checkboxUseSshPubkey;
     private Button buttonGeneratePubkey;
@@ -84,6 +85,7 @@ public class ConfigSSH extends MainConfiguration {
         sshUser = (EditText) findViewById(R.id.sshUser);
         sshPassword = (EditText) findViewById(R.id.sshPassword);
         sshPassphrase = (EditText) findViewById(R.id.sshPassphrase);
+        sshStartupCommand = (EditText) findViewById(R.id.sshStartupCommand);
         checkboxKeepSshPass = (CheckBox) findViewById(R.id.checkboxKeepSshPass);
         checkboxUseSshPubkey = (CheckBox) findViewById(R.id.checkboxUseSshPubkey);
         buttonGeneratePubkey = (Button) findViewById(R.id.buttonGeneratePubkey);
@@ -137,6 +139,12 @@ public class ConfigSSH extends MainConfiguration {
             sshPassword.setText("");
         }
         checkboxKeepSshPass.setChecked(selected.getKeepPassword());
+
+        // Reuses the bean's (otherwise unused) sshRemoteCommand slot.
+        if (sshStartupCommand != null) {
+            String cmd = selected.getSshRemoteCommand();
+            sshStartupCommand.setText(cmd == null ? "" : cmd);
+        }
 
         // Phase 3.6 — pubkey auth UI. The base class's commonUpdateViewFromSelected
         // already reads SshPassPhrase into the sshPassphrase EditText, but it
@@ -207,6 +215,12 @@ public class ConfigSSH extends MainConfiguration {
         selected.setSshUser("");
         selected.setSshPassword("");
         selected.setSshHostKey("");
+
+        // NOT cleared above on purpose: the SSH terminal's startup command
+        // reuses the bean's sshRemoteCommand slot (dead elsewhere).
+        if (sshStartupCommand != null) {
+            selected.setSshRemoteCommand(sshStartupCommand.getText().toString());
+        }
 
         // Phase 3.6: SshPubKey/SshPrivKey are the generated-key fields,
         // shared between VNC-over-SSH-tunnel and the SSH terminal. We

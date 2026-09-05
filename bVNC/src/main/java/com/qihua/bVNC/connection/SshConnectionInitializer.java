@@ -204,6 +204,8 @@ public class SshConnectionInitializer extends ConnectionInitializer {
     private String sshPassPhrase;
     private boolean useSshPubKey;
     private String savedHostKey;
+    /** Typed into the shell once it is ready. Empty = disabled. */
+    private String sshStartupCommand;
     /**
      * Phase 2: bridge between the trilead Session and TermSession. Built
      * in {@link #initialize(RemoteCanvas)} so the renderer can wire its
@@ -312,6 +314,9 @@ public class SshConnectionInitializer extends ConnectionInitializer {
         sshPassPhrase = conn.getSshPassPhrase() == null ? "" : conn.getSshPassPhrase();
         useSshPubKey = conn.getUseSshPubKey();
         savedHostKey = conn.getSshHostKey() == null ? "" : conn.getSshHostKey();
+        // Startup command reuses the bean's sshRemoteCommand slot, which the
+        // VNC-over-SSH tunnel path never reads.
+        sshStartupCommand = conn.getSshRemoteCommand() == null ? "" : conn.getSshRemoteCommand();
         sshTerminal = new SshTerminalConnection(sshHost, sshPort, savedHostKey);
 
         SshCommunicator sshComm = new SshCommunicator(App.debugLog, canvas.handler, fbW, fbH);
@@ -498,6 +503,7 @@ public class SshConnectionInitializer extends ConnectionInitializer {
             channel.attach(sshSession);
             shellReady = true;
             Log.i(TAG, "doConnect: shell channel attached, terminal should start showing output");
+            sendStartupCommand();
             // Force one paint now so the (still empty, blue) grid gives
             // way to whatever the shell has already emitted since attach.
             postPaint();
@@ -511,6 +517,28 @@ public class SshConnectionInitializer extends ConnectionInitializer {
                 }
             }
         }
+    }
+
+    /**
+     * Type the configured startup command as if the user had entered it.
+     * CR, not LF — that is what the Enter key sends, see
+     * {@code RemoteSshKeyboard} KEYCODE_ENTER.
+     *
+     * <p>Posted to the main thread on purpose: the pipe behind
+     * {@code writeString} is a {@link java.io.PipedInputStream}, which kills
+     * its reader with "Write end dead" once the thread that last wrote to it
+     * exits. Writing from the short-lived SSH-Connect thread would take down
+     * {@code writePump} and silently swallow every later keystroke. The
+     * keyboard writes from main, which outlives the session.
+     */
+    private void sendStartupCommand() {
+        if (sshStartupCommand == null || renderer == null || canvas == null) return;
+        final String cmd = sshStartupCommand.trim();
+        if (cmd.isEmpty()) return;
+        Log.i(TAG, "doConnect: sending startup command");
+        canvas.handler.post(() -> {
+            if (renderer != null) renderer.writeString(cmd + "\r");
+        });
     }
 
     private void postPaint() {

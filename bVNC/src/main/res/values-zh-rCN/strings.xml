@@ -737,6 +737,8 @@ aSPICE对应的功能如下：
     <string name="spice_tls_port_hint">TLS端口</string>
     <string name="spice_username_hint">SPICE用户名</string>
     <string name="ssh_passphrase_hint">SSH密码短语</string>
+    <string name="ssh_startup_command">启动命令</string>
+    <string name="ssh_startup_command_hint">连接后自动执行，例：tmux attach -t work</string>
     <string name="ssh_pubkey_button">管理密钥</string>
     <string name="ssh_use_pubkey">使用密钥</string>
     <string name="ssh_import_privkey_button">导入私钥</string>

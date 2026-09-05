@@ -809,6 +809,8 @@ When you add or edit a connection, you will see a connection configuration page.
     <string name="spice_username_hint">SPICE Username</string>
 
     <string name="ssh_passphrase_hint">SSH Passphrase</string>
+    <string name="ssh_startup_command">Startup Command</string>
+    <string name="ssh_startup_command_hint">Run on connect, e.g. tmux attach -t work</string>
     <string name="ssh_pubkey_button">Manage Key</string>
     <string name="ssh_use_pubkey">Use Key</string>
     <string name="ssh_import_privkey_button">Import Private Key</string>
