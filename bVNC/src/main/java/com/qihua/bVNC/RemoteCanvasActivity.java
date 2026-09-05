@@ -1833,6 +1833,10 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
         }
 
         int itemId = item.getItemId();
+        if (itemId == R.id.itemDisconnect || itemId == R.id.menuDisconnect) {
+            disconnectAndClose();
+            return true;
+        }
         if (itemId == R.id.itemZoomable || itemId == R.id.itemOneToOne || itemId == R.id.itemFitToScreen) {
             AbstractScaling.getById(item.getItemId()).setScaleTypeForActivity(this);
             item.setChecked(true);

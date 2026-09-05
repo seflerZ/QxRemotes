@@ -297,7 +297,6 @@ Valid until: %7$s
     <string name="import_settings">Import</string>
     <string name="import_settings_file_url" />
 
-    <string name="info">Info</string>
     <string name="info_cert_signatures">"The certificate information is: "</string>
     <string name="info_cert_signatures_identical">\n\nYou can ensure the information matches the server certificate to prevent a man-in-the-middle attack.</string>
     <string name="info_cert_tunnel">Do you want to connect to the host identified by the following certificate?
@@ -319,7 +318,6 @@ Valid until:
 Note: The application does not verify certificate authorities or check for certificate revocation.</string>
     <string name="info_continue_connecting">"Continue connecting to: "</string>
     <string name="info_continue_connected">Successfully connected. Waiting for incoming frames.</string>
-    <string name="info_encoding">" encoding, "</string>
     <string name="info_progress_dialog_aborted">Connection aborted!</string>
     <string name="info_progress_dialog_connecting">Connecting</string>
     <string name="info_progress_dialog_downloading">Downloading first frame.\nPlease wait…</string>

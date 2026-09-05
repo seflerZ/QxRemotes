@@ -5,6 +5,7 @@ import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.text.TextPaint;
+import android.util.SparseArray;
 
 import com.qihua.bVNC.R;
 
@@ -80,6 +81,11 @@ public final class VTermCanvasRenderer {
     // keystroke and replays grid cell-by-cell; without dedup the log
     // buffer fills with thousands of lines for the same codepoint.
     private final java.util.HashSet<Integer> loggedEmoji = new java.util.HashSet<>();
+    /** Bold/skew-free paint used only to measure glyph advances. */
+    private final TextPaint measurePaint;
+    /** codepoint → glyph advance in px. Touched only from the SSH-Paint
+     *  thread (paintCell), so no synchronization. */
+    private final SparseArray<Float> advCache = new SparseArray<>();
 
     public VTermCanvasRenderer(int fontSizePx, int paddingPx, Typeface typeface, Context ctx) {
         this.fontSizePx = fontSizePx;
@@ -95,6 +101,10 @@ public final class VTermCanvasRenderer {
         this.charHeight = (int) Math.ceil(fm.descent - fm.ascent);
         float measured = textPaint.measureText("M");
         this.charWidth = (measured > 0f) ? measured : charHeight * 0.6f;
+
+        this.measurePaint = new TextPaint();
+        measurePaint.setTypeface(typeface);
+        measurePaint.setTextSize(fontSizePx);
 
         this.bgPaint = new Paint();
         bgPaint.setStyle(Paint.Style.FILL);
@@ -424,6 +434,15 @@ public final class VTermCanvasRenderer {
                     canvas.drawText(str, drawX, baselineY, textPaint);
                 }
             } else {
+                // Ambiguous-width chars (① U+2460, ● U+25CF, ★ U+2605 …)
+                // have a 1.0em advance in Sarasa Mono but are absent from
+                // libvterm's fullwidth.inc, so cell.width is 1 and the next
+                // column's bg fill erases the glyph's right half. Squeeze
+                // horizontally into the allotted box rather than widening
+                // the cell: the remote laid the line out with wcwidth()==1,
+                // so eating 2 columns here would drift the whole row.
+                float scaleX = fitScaleX(cell.codepoint, str, Math.max(1, cell.width));
+                if (scaleX < 1f) textPaint.setTextScaleX(scaleX);
                 if ((cell.attrs & ATTR_ITALIC) != 0) {
                     // Italic (-0.25 skewX about baseline) shifts the glyph's
                     // glyph-top rightward by tan(0.25)*ascent (~0.25 * em).
@@ -437,6 +456,7 @@ public final class VTermCanvasRenderer {
                 } else {
                     canvas.drawText(str, cellLeft, baselineY, textPaint);
                 }
+                textPaint.setTextScaleX(1f);
                 textPaint.setFakeBoldText(false);
                 textPaint.setTextSkewX(0f);
             }
@@ -450,6 +470,25 @@ public final class VTermCanvasRenderer {
             float underlineY = cellBottom - Math.max(1f, fontSizePx / 14f);
             canvas.drawLine(cellLeft, underlineY, cellRight, underlineY, underlinePaint);
         }
+    }
+
+    /**
+     * Horizontal squeeze factor so {@code cp}'s glyph fits a {@code cells}-
+     * column box; 1f when it already fits. Advances are cached per codepoint
+     * because paintCell runs for every cell of every frame and measureText
+     * is far too slow to call there unguarded.
+     */
+    private float fitScaleX(int cp, String str, int cells) {
+        Float hit = advCache.get(cp);
+        float adv;
+        if (hit == null) {
+            adv = measurePaint.measureText(str);
+            advCache.put(cp, adv);
+        } else {
+            adv = hit;
+        }
+        float box = charWidth * cells;
+        return (adv > box && box > 0f) ? box / adv : 1f;
     }
 
     /**

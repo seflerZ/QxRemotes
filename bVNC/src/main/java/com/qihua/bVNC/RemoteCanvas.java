@@ -217,14 +217,6 @@ public class RemoteCanvas extends SurfaceView implements Viewable
             Toast.makeText(getContext(), screenMessage, Toast.LENGTH_SHORT).show();
         }
     };
-    /**
-     * This runnable causes a toast with information about the current connection to be shown.
-     */
-    private Runnable desktopInfo = new Runnable() {
-        public void run() {
-            showConnectionInfo();
-        }
-    };
 
     private boolean touchpad = false;
     public RemoteCanvasActivity activity;
@@ -1017,7 +1009,6 @@ public class RemoteCanvas extends SurfaceView implements Viewable
         decoder = null;
         scaler = null;
         screenMessage = null;
-        desktopInfo = null;
 
         disposeDrawable();
     }
@@ -1315,35 +1306,6 @@ public class RemoteCanvas extends SurfaceView implements Viewable
      */
     public void reDraw(float x, float y, float w, float h) {
         reDraw((int) x, (int) y, (int) w, (int) h);
-    }
-
-    /**
-     * Displays connection info in a toast message.
-     */
-    public void showConnectionInfo() {
-        if (rfbconn == null)
-            return;
-
-        String msg = null;
-        int idx = rfbconn.desktopName().indexOf("(");
-        if (idx > 0) {
-            // Breakup actual desktop name from IP addresses for improved
-            // readability
-            String dn = rfbconn.desktopName().substring(0, idx).trim();
-            String ip = rfbconn.desktopName().substring(idx).trim();
-            msg = dn + "\n" + ip;
-        } else
-            msg = rfbconn.desktopName();
-        msg += "\n" + rfbconn.framebufferWidth() + "x" + rfbconn.framebufferHeight();
-        String enc = rfbconn.getEncoding();
-        // Encoding might not be set when we display this message
-        if (decoder != null && decoder.getColorModel() != null) {
-            if (enc != null && !enc.equals("")) {
-                msg += ", " + rfbconn.getEncoding() + getContext().getString(R.string.info_encoding) + decoder.getColorModel().toString();
-            }
-            msg += ", " + decoder.getColorModel().toString();
-        }
-        Toast.makeText(getContext(), msg, Toast.LENGTH_SHORT).show();
     }
 
     /**

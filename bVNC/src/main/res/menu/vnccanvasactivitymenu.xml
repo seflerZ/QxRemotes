@@ -130,12 +130,6 @@
 <!--        android:numericShortcut="2"-->
 <!--        android:title="@string/center_mouse" />-->
     <item
-        android:id="@+id/itemInfo"
-        android:alphabeticShortcut="i"
-        android:icon="@android:drawable/ic_menu_info_details"
-        android:numericShortcut="9"
-        android:title="@string/info"></item>
-    <item
         android:id="@+id/itemHelpInputMode"
         android:icon="@android:drawable/ic_menu_help"
         android:title="@string/input_mode_help"

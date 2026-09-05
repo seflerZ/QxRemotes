@@ -268,7 +268,6 @@ Valid until: %7$s
     <string name="import_export_settings">导入／导出设定</string>
     <string name="import_settings">导入</string>
     <string name="import_settings_file_url" />
-    <string name="info">信息</string>
     <string name="info_cert_signatures">"证书信息是："</string>
     <string name="info_cert_signatures_identical">\n\n您可以确认信息与服务器证书匹配，以防止中间人攻击。</string>
     <string name="info_cert_tunnel">是否要连接以下证书标识的主机？
@@ -290,7 +289,6 @@ Valid until:
 Note: The application does not verify certificate authorities or check for certificate revocation.</string>
     <string name="info_continue_connecting">"继续连接到："</string>
     <string name="info_continue_connected">接连成功。等待图像传输中……</string>
-    <string name="info_encoding">"编码"</string>
     <string name="info_progress_dialog_aborted">连接被中止了！</string>
     <string name="info_progress_dialog_connecting">正在连接</string>
     <string name="info_progress_dialog_downloading" tools:ignore="TypographyEllipsis">正在下载第一帧，请稍候……</string>
