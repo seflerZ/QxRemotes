@@ -365,6 +365,24 @@ public class SshTerminalRenderer {
         return (c.row + 2) * canvasRenderer.charHeight;
     }
 
+    /**
+     * Y pixel of the bottom edge of the live grid in mbitmap coordinates.
+     * Used by the SSH IME push-up path as the RDP-equivalent
+     * "scroll-to-bottom" anchor — {@code repanCanvas4SSH} takes
+     * {@code max(cursorY, terminalBottomY)} as the pan anchor so the
+     * whole grid (including rows below the cursor) stays visible above
+     * the IME instead of being scrolled off-screen when the cursor is
+     * in the upper half. Returns 0 if the renderer hasn't opened yet.
+     */
+    public int getTerminalBottomY() {
+        if (canvasRenderer == null || stateMachine == null) {
+            return 0;
+        }
+        // rows is set by renderInto on every size change, so it always
+        // matches the current cols/rows of the state machine.
+        return stateMachine.getRows() * canvasRenderer.charHeight;
+    }
+
     public void close() {
         if (closed) return;
         closed = true;

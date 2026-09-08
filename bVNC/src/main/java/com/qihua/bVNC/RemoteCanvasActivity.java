@@ -28,10 +28,10 @@ import static com.qihua.bVNC.App.getContext;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.content.ClipData;
-import android.content.ClipboardManager;
 import android.app.Dialog;
 import android.app.Service;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.DialogInterface;
@@ -44,7 +44,6 @@ import android.gesture.GestureLibrary;
 import android.gesture.GestureOverlayView;
 import android.gesture.Prediction;
 import android.graphics.Rect;
-import android.graphics.drawable.Drawable;
 import android.hardware.display.DisplayManager;
 import android.media.AudioManager;
 import android.net.Uri;
@@ -56,7 +55,6 @@ import android.os.IBinder;
 import android.os.PersistableBundle;
 import android.os.StrictMode;
 import android.os.SystemClock;
-import android.os.Vibrator;
 import android.provider.Settings;
 import android.util.DisplayMetrics;
 import android.util.Log;
@@ -87,9 +85,6 @@ import android.widget.Toast;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.ActionBar;
 import androidx.appcompat.app.AppCompatActivity;
-// PopupMenu import removed — selection menu now uses AlertDialog.
-// PopupMenu's window came up with contentSize=0x0 in our context.
-// (See showSelectionMenu.)
 
 import com.google.android.material.button.MaterialButton;
 import com.limelight.binding.input.ControllerHandler;
@@ -98,6 +93,7 @@ import com.limelight.nvstream.http.ComputerDetails;
 import com.limelight.nvstream.http.PairingManager;
 import com.limelight.ui.GameGestures;
 import com.qihua.bVNC.connection.ProtocolType;
+import com.qihua.bVNC.connection.SshConnectionInitializer;
 import com.qihua.bVNC.dialogs.EnterTextDialog;
 import com.qihua.bVNC.dialogs.MetaKeyDialog;
 import com.qihua.bVNC.extrakeys.ExtraKeyButton;
@@ -108,7 +104,6 @@ import com.qihua.bVNC.extrakeys.SpecialButton;
 import com.qihua.bVNC.gesture.GestureActionLibrary;
 import com.qihua.bVNC.input.CustomKeyboardView;
 import com.qihua.bVNC.input.InputHandler;
-import com.qihua.util.BackTapKeyboardHelper;
 import com.qihua.bVNC.input.InputHandlerDirectTouch;
 import com.qihua.bVNC.input.InputHandlerGamepad;
 import com.qihua.bVNC.input.InputHandlerTouchpad;
@@ -117,9 +112,10 @@ import com.qihua.bVNC.input.Panner;
 import com.qihua.bVNC.input.RemoteCanvasHandler;
 import com.qihua.bVNC.input.RemoteKeyboard;
 import com.qihua.bVNC.input.RemoteSshPointer;
+import com.qihua.bVNC.util.SmartResolutionUtils;
+import com.qihua.util.BackTapKeyboardHelper;
 import com.qihua.util.SamsungDexUtils;
 import com.qihua.util.UriIntentParser;
-import com.qihua.bVNC.util.SmartResolutionUtils;
 import com.undatech.opaque.Connection;
 import com.undatech.opaque.ConnectionSettings;
 import com.undatech.opaque.MessageDialogs;
@@ -138,10 +134,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.stream.Collectors;
 
 public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyListener, OnGenericMotionListener, GameGestures {
@@ -501,10 +495,18 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
                     lastPanDist = 0;
                 }
             } else {
-                // Pretend cursor was already stable so repanCanvas4SSH skips
-                // its 50 ms settle window and pans on the first IME-up event.
+                // Prime cursorIsInKeyboard from the actual cursor position so
+                // repanCanvas4SSH sees a matching zone on the first IME-up
+                // event and applies the pan immediately. Setting it to true
+                // unconditionally forced a false zone-change every frame when
+                // the cursor was above the keyboard band, which made the
+                // 200 ms settle window swallow the first IME-up pan — visible
+                // as "renders without offset, then snaps up" jitter.
                 if (isToolbarShow) {
-                    cursorIsInKeyboard = true;
+                    SshConnectionInitializer ssh =
+                            (SshConnectionInitializer) canvas.connInitializer;
+                    float anchorY = Math.max(ssh.getCursorPixelY(), ssh.getTerminalBottomY());
+                    cursorIsInKeyboard = anchorY + keyboardHeight - canvas.getHeight() > 0;
                     cursorStateChangedAt = 0L;
                 }
                 repanCanvas4SSH(isToolbarShow);
@@ -2125,14 +2127,26 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
 
     /**
      * SSH cursor-aware IME push-up. Uses libvterm cursor Y instead of
-     * pointer Y (RemoteSshPointer is a no-op). Idempotent across
-     * IME-animation fires and content-update re-fires (undo+apply net
-     * to zero when cursor Y doesn't change). Must run on the main
-     * thread — touches absoluteYPosition / relativePan.
+     * pointer Y (RemoteSshPointer is a no-op), but clamped against the
+     * terminal bottom — same RDP "scroll-to-bottom" semantics:
+     *   anchor = max(cursorY, terminalBottomY)
+     *   pan    = anchor + keyboardHeight - canvasHeight
+     * When the cursor sits in the upper half of the grid, anchoring to
+     * the cursor alone would push the rows below the cursor off-screen;
+     * anchoring to the bottom keeps the whole grid visible above the
+     * IME. When the cursor is in the last row(s), cursorY ≈ terminalBottomY
+     * and the two are equivalent. Idempotent across IME-animation fires
+     * and content-update re-fires (undo+apply net to zero when neither
+     * anchor nor keyboardHeight changes). Must run on the main thread —
+     * touches absoluteYPosition / relativePan.
      */
     public void repanCanvas4SSH(boolean isShow) {
-        float pointerYPos = ((com.qihua.bVNC.connection.SshConnectionInitializer) canvas.connInitializer).getCursorPixelY();
-        float panDistance = pointerYPos + keyboardHeight - canvas.getHeight();
+        com.qihua.bVNC.connection.SshConnectionInitializer ssh =
+                (com.qihua.bVNC.connection.SshConnectionInitializer) canvas.connInitializer;
+        float cursorY = ssh.getCursorPixelY();
+        float terminalBottomY = ssh.getTerminalBottomY();
+        float anchorY = Math.max(cursorY, terminalBottomY);
+        float panDistance = anchorY + keyboardHeight - canvas.getHeight();
 
         if (isShow) {
             boolean nowInKeyboard = panDistance > 0;
