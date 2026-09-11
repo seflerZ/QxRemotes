@@ -627,6 +627,11 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
         extraKeysView.setButtonTextAllCaps(true);
 
         customKeyboardEnabled = Utils.querySharedPreferenceBoolean(this, Constants.customKeyboardEnabled, false);
+        // SSH has no remote IME to forward to — always use the system IME.
+        if (canvas.connection != null
+                && canvas.connection.getConnectionType() == Constants.CONN_TYPE_SSH) {
+            customKeyboardEnabled = false;
+        }
         customKeyboardLayout = findViewById(R.id.customKeyboardLayout);
         keyboardDragHandle = findViewById(R.id.keyboardDragHandle);
         if (customKeyboardEnabled && customKeyboardLayout != null) {
