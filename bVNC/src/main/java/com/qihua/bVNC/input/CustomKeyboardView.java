@@ -50,7 +50,7 @@ public class CustomKeyboardView extends ViewGroup {
     private static final float ROW_HEIGHT_DP = 48f;
     private static final int ROW_COUNT = 4;
     /** Reference row width in key units (row 0: 10 letters + 1.5u BKSP). */
-    private static final float ROW_UNITS = 11.5f;
+    private static final float ROW_UNITS = 10f;
     /** Screen width (dp) past which the keyboard splits into two groups. */
     public static final float SPLIT_WIDTH_THRESHOLD_DP = ROW_UNITS * MAX_KEY_WIDTH_DP;
     /** Per-half content width in key units when split; SPACE flexes to fill it so both bars touch the center gap. */
@@ -120,18 +120,19 @@ public class CustomKeyboardView extends ViewGroup {
         }
     }
 
-    private static final KeyDef BKSP = new KeyDef("⌫", (char) 0, KeyEvent.KEYCODE_DEL, (char) 0, 1.5f, 1f);
+    private static final KeyDef BKSP = new KeyDef("⌫", (char) 0, KeyEvent.KEYCODE_DEL, (char) 0, -1f, 1f);
     private static final KeyDef SPACE_FLAT = new KeyDef("SPACE", (char) 0, KeyEvent.KEYCODE_SPACE, (char) 0, -1f, 0f);
     private static final KeyDef SPACE_L = new KeyDef("SPACE", (char) 0, KeyEvent.KEYCODE_SPACE, (char) 0, 0f, -1f);
     private static final KeyDef SPACE_R = new KeyDef("SPACE", (char) 0, KeyEvent.KEYCODE_SPACE, (char) 0, 0f, -1f);
-    private static final KeyDef ENTER = new KeyDef("ENTER ⏎", "⏎", (char) 0, KeyEvent.KEYCODE_ENTER, (char) 0, -1f, 2f);
+    private static final KeyDef ENTER = new KeyDef("ENTER ⏎", "⏎", (char) 0, KeyEvent.KEYCODE_ENTER, (char) 0, 2.5f, 2f);
     /** Right shift latch: one-shot; the latch also sends R-SHIFT down/up to the remote. */
-    private static final KeyDef SHIFT = new KeyDef("SHIFT", (char) 0, KeyEvent.KEYCODE_SHIFT_RIGHT, (char) 0, -1f, 1.5f);
+    private static final KeyDef SHIFT = new KeyDef("SHIFT", (char) 0, KeyEvent.KEYCODE_SHIFT_RIGHT, (char) 0, 2.5f, -1f);
     // Punctuation swipe-ups mirror the physical keyboard's Shift pairs (?/ is flipped: ? is the face).
-    private static final KeyDef COMMA = kd(',', '<');
+    private static final KeyDef COMMA = kd(',', '<', 1.5f, 1f);
     private static final KeyDef DOT = kd('.', '>');
     private static final KeyDef SEMI = kd(';', ':');
     private static final KeyDef QUESTION = kd('?', '/');
+    private static final KeyDef QUESTION_F = kd('?', '/', '\\');
     private static final KeyDef HYPHEN = kd('-', '_');
     private static final KeyDef WAVE = kd('`', '~');
     private static final KeyDef APOSTROPHE = kd('\'', '"');
@@ -150,18 +151,20 @@ public class CustomKeyboardView extends ViewGroup {
                 r = kd('r', '4', '$'), t = kd('t', '5', '%'), y = kd('y', '6', '^'),
                 u = kd('u', '7', '&'), i = kd('i', '8', '*'), o = kd('o', '9', '('),
                 p = kd('p', '0', ')');
-        KeyDef z = kd('z'), x = kd('x'), c = kd('c'), v = kd('v'), b = kd('b'), n = kd('n'), m = kd('m');
-        KeyDef[] r0 = {q, w, e, r, t, y, u, i, o, p, BKSP};
+        KeyDef z = kd('z'), x = kd('x'), c = kd('c'), v = kd('v'), b = kd('b'),
+                n = kd('n'), n_f = kd('n', '<', ','), m_f = kd('m', '>', '.'), m = kd('m');
+        KeyDef[] r0 = {q, w, e, r, t, y, u, i, o, p};
         KeyDef[] r0split = {q, w, e, r, t, Y_LEFT, y, u, i, o, p, BKSP};
-        KeyDef[] r1 = {kd('a'), kd('s'), kd('d'), kd('f'), kd('g'), kd('h'), kd('j'), kd('k'), kd('l'), ENTER};
-        KeyDef[] r2 = {z, x, c, v, b, n, m, QUESTION, HYPHEN, SHIFT};
-        KeyDef[] r2split = {z, x, c, v, b, n, m, QUESTION, HYPHEN, SHIFT};
-        KeyDef[] r3flat = {DOT, COMMA, SPACE_FLAT, SEMI, APOSTROPHE};
-        KeyDef[] r3split = {WAVE, DOT, COMMA, SPACE_L, SPACE_R, SLASH, SEMI, APOSTROPHE};
+        KeyDef[] r1 = {kd('a'), kd('s'), kd('d'), kd('f'), kd('g'), kd('h'), kd('j'), kd('k'), kd('l')};
+        KeyDef[] r1split = {kd('a'), kd('s'), kd('d'), kd('f'), kd('g'), kd('h'), kd('j'), kd('k'), kd('l'), ENTER};
+        KeyDef[] r2 = {z, x, c, v, b, n_f, m_f, QUESTION_F, BKSP};
+        KeyDef[] r2split = {z, x, c, v, b, n, m, QUESTION, SEMI, SHIFT};
+        KeyDef[] r3flat = {SHIFT, SPACE_FLAT, ENTER};
+        KeyDef[] r3split = {WAVE, COMMA, SPACE_L, SPACE_R, DOT, APOSTROPHE};
         ROWS_FLAT = new Row[]{new Row(r0, 0, r0.length), new Row(r1, STAGGER_ROW1, r1.length),
                 new Row(r2, STAGGER_ROW2, r2.length), new Row(r3flat, 0, r3flat.length)};
-        ROWS_SPLIT = new Row[]{new Row(r0split, 0, 6), new Row(r1, STAGGER_ROW1, 5),
-                new Row(r2split, STAGGER_ROW2, 5), new Row(r3split, STAGGER_ROW3, 4)};
+        ROWS_SPLIT = new Row[]{new Row(r0split, 0, 6), new Row(r1split, STAGGER_ROW1, 5),
+                new Row(r2split, STAGGER_ROW2, 5), new Row(r3split, STAGGER_ROW3, 3)};
     }
 
     private final List<KeyButton> buttons = new ArrayList<>();
