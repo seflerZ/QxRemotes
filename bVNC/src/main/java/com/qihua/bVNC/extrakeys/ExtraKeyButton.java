@@ -25,6 +25,10 @@ public class ExtraKeyButton {
     /** The key name for the nested dict to define popup extra key info if using a dict to define the extra key. {popup: {key: name, ...}, ...} */
     public static final String KEY_POPUP = "popup";
 
+    /** The key name for the boolean toggle flag. When true, the button behaves like a sticky
+     * special button: first tap sends ACTION_DOWN, second tap sends ACTION_UP. */
+    public static final String KEY_TOGGLE = "toggle";
+
 
     /**
      * The key that will be sent to the terminal, either a control character, like defined in
@@ -47,6 +51,9 @@ public class ExtraKeyButton {
      */
     @Nullable
     private final ExtraKeyButton popup;
+
+    /** Whether this button should behave as a sticky toggle (first tap = ACTION_DOWN, second = ACTION_UP). */
+    private final boolean toggle;
 
 
     /**
@@ -110,6 +117,7 @@ public class ExtraKeyButton {
         }
 
         this.popup = popup;
+        this.toggle = config.optBoolean(KEY_TOGGLE, false);
     }
 
     public String getStringFromJson(@NonNull JSONObject config, @NonNull String key) {
@@ -139,6 +147,11 @@ public class ExtraKeyButton {
     @Nullable
     public ExtraKeyButton getPopup() {
         return popup;
+    }
+
+    /** Whether this button should fire as a sticky toggle (DOWN on first tap, UP on second). */
+    public boolean isToggle() {
+        return toggle;
     }
 
     /**

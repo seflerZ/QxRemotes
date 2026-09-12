@@ -845,29 +845,41 @@ public class Utils {
             view.getOverlay().add(flash);
             view.setTag(R.id.key_flash_drawable, flash);
             view.setTag(R.id.key_fade_animator, null);
-            return;
+        } else {
+            Object f = view.getTag(R.id.key_flash_drawable);
+            if (!(f instanceof ColorDrawable)) return;
+            final ColorDrawable flash = (ColorDrawable) f;
+            final View host = view;
+            ValueAnimator animator = ValueAnimator.ofInt(KEY_FLASH_ALPHA, 0);
+            animator.setDuration(KEY_PRESS_FADE_MS);
+            animator.addUpdateListener(a -> flash.setAlpha((int) a.getAnimatedValue()));
+            animator.addListener(new AnimatorListenerAdapter() {
+                @Override
+                public void onAnimationEnd(Animator animation) {
+                    host.getOverlay().remove(flash);
+                }
+
+                @Override
+                public void onAnimationCancel(Animator animation) {
+                    host.getOverlay().remove(flash);
+                }
+            });
+            view.setTag(R.id.key_flash_drawable, null);
+            view.setTag(R.id.key_fade_animator, animator);
+            animator.start();
         }
+        if (sOnAnyKeyPressListener != null) sOnAnyKeyPressListener.onAnyKeyPressChange(pressed);
+    }
 
-        Object f = view.getTag(R.id.key_flash_drawable);
-        if (!(f instanceof ColorDrawable)) return;
-        final ColorDrawable flash = (ColorDrawable) f;
-        final View host = view;
-        ValueAnimator animator = ValueAnimator.ofInt(KEY_FLASH_ALPHA, 0);
-        animator.setDuration(KEY_PRESS_FADE_MS);
-        animator.addUpdateListener(a -> flash.setAlpha((int) a.getAnimatedValue()));
-        animator.addListener(new AnimatorListenerAdapter() {
-            @Override
-            public void onAnimationEnd(Animator animation) {
-                host.getOverlay().remove(flash);
-            }
+    /** Fired by {@link #setKeyPressedFlash} whenever any on-screen key is pressed or released.
+     * Used to drive UI like fading the keyboard backdrop more opaque while typing. */
+    public interface OnAnyKeyPressListener {
+        void onAnyKeyPressChange(boolean pressed);
+    }
 
-            @Override
-            public void onAnimationCancel(Animator animation) {
-                host.getOverlay().remove(flash);
-            }
-        });
-        view.setTag(R.id.key_flash_drawable, null);
-        view.setTag(R.id.key_fade_animator, animator);
-        animator.start();
+    private static OnAnyKeyPressListener sOnAnyKeyPressListener;
+
+    public static void setOnAnyKeyPressListener(OnAnyKeyPressListener l) {
+        sOnAnyKeyPressListener = l;
     }
 }

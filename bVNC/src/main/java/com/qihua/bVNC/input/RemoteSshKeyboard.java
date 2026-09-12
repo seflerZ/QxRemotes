@@ -103,6 +103,17 @@ public class RemoteSshKeyboard extends RemoteKeyboard {
         // already carries it), and resetOnScreenModsAfterInput only fires
         // when onScreenMetaState is non-zero, which is correct either way.
         if (handleModifierKeyCode(keyCode, evt)) return true;
+        // Sticky toggle keys (F1-F12, arrows, Home/End, ...) come through
+        // here with both ACTION_DOWN and ACTION_UP — DOWN was already sent
+        // by the first tap, UP needs writeKey(...,false) to release.
+        // Printables below are non-toggle and don't need this branch.
+        if (evt.getAction() == KeyEvent.ACTION_UP) {
+            int upVkey = androidKeyToVtermKey(keyCode);
+            if (upVkey != SshTermStateMachine.KEY_NONE) {
+                termSession.writeKey(upVkey, SshTermStateMachine.MOD_NONE);
+            }
+            return true;
+        }
         if (evt.getAction() != KeyEvent.ACTION_DOWN) {
             return true;
         }

@@ -220,6 +220,9 @@ public class Constants {
     public static final String backTapShowKeyboard = "backTapShowKeyboard";
     public static final String customKeyboardEnabled = "customKeyboardEnabled";
     public static final String customKeyboardBottomFraction = "customKeyboardBottomFraction";
+    public static final String customKeyboardFloating = "customKeyboardFloating";
+    public static final String customKeyboardXFraction = "customKeyboardXFraction";
+    public static final String customKeyboardYFraction = "customKeyboardYFraction";
     public static final String softwareKeyboardType = "softwareKeyboardType";
     public static final String ACTION_USB_PERMISSION = "com.qihua.aSPICE.USB_PERMISSION";
     public static final int usbDeviceTimeout = 5000;

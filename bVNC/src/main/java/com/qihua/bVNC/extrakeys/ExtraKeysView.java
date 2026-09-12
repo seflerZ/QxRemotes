@@ -90,7 +90,7 @@ public final class ExtraKeysView extends GridLayout {
     public static final int FALLBACK_LONG_PRESS_DURATION = 400;
 
     /** Max width of one key; past keys×this the bar splits into two edge-docked groups. */
-    private static final float MAX_KEY_WIDTH_DP = 56f;
+    public static final float MAX_KEY_WIDTH_DP = 56f;
 
     /** Defines the minimum allowed duration in milliseconds for {@link #mLongPressRepeatDelay}. */
     public static final int MIN_LONG_PRESS__REPEAT_DELAY = 5;
@@ -371,6 +371,18 @@ public final class ExtraKeysView extends GridLayout {
 
                 HintButton button;
                 if (isSpecialButton(buttonInfo)) {
+                    button = createSpecialButton(buttonInfo.getKey(), true);
+                    if (button == null) return;
+                } else if (buttonInfo.isToggle()) {
+                    // Sticky toggle: register key in mSpecialButtons so it
+                    // gets isCreated/isActive/isLocked treatment and the
+                    // active-text color highlights while held.
+                    SpecialButton sb = SpecialButton.registerOrGet(buttonInfo.getKey());
+                    if (!mSpecialButtons.containsKey(sb)) {
+                        mSpecialButtons.put(sb, new SpecialButtonState(this));
+                        mSpecialButtonsKeys = mSpecialButtons.keySet().stream()
+                            .map(SpecialButton::getKey).collect(Collectors.toSet());
+                    }
                     button = createSpecialButton(buttonInfo.getKey(), true);
                     if (button == null) return;
                 } else {

@@ -44,6 +44,17 @@ public class SpecialButton {
         return map.get(key);
     }
 
+    /**
+     * Get the {@link SpecialButton} for {@code key}, creating a new one if it
+     * doesn't exist. Used by {@link ExtraKeysView} to register extra-key
+     * toggles (e.g. "F3") at view-build time.
+     */
+    public static SpecialButton registerOrGet(String key) {
+        SpecialButton existing = map.get(key);
+        if (existing != null) return existing;
+        return new SpecialButton(key);
+    }
+
     @NonNull
     @Override
     public String toString() {

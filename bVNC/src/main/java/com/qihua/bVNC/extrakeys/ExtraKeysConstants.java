@@ -51,6 +51,25 @@ public class ExtraKeysConstants {
     }};
 
 
+    /**
+     * Extra keyCodes lookup for sticky-toggle special buttons.
+     *
+     * <p>Keys here behave like {@link #PRIMARY_KEY_CODES_FOR_STRINGS} for
+     * dispatch but are NOT routed through libvterm on SSH (libvterm has no
+     * concept of Right-Alt/Ctrl/Shift or Lock keys — toggle there is
+     * equivalent to the LEFT variant).
+     */
+    public static Map<String, Integer> EXTRA_KEY_TOGGLE_KEY_CODES = new HashMap<String, Integer>() {{
+        put("R_ALT",   KeyEvent.KEYCODE_ALT_RIGHT);
+        put("R_CTRL",  KeyEvent.KEYCODE_CTRL_RIGHT);
+        put("R_SHIFT", KeyEvent.KEYCODE_SHIFT_RIGHT);
+        put("R_META",  KeyEvent.KEYCODE_META_RIGHT);
+        put("CAPS_LOCK",   KeyEvent.KEYCODE_CAPS_LOCK);
+        put("NUM_LOCK",    KeyEvent.KEYCODE_NUM_LOCK);
+        put("SCROLL_LOCK", KeyEvent.KEYCODE_SCROLL_LOCK);
+    }};
+
+
 
     /**
      * HashMap that implements Python dict.get(key, default) function.
@@ -183,6 +202,16 @@ public class ExtraKeysConstants {
         put("RETURN", "ENTER"); // Technically different keys, but most applications won't see the difference
         put("FUNCTION", "FN");
         // no alias for ALT
+
+        // Right-side modifiers — togglable for layouts that need a separate
+        // AltGr key. Names resolve through PRIMARY_KEY_CODES_FOR_STRINGS
+        // alias and the EXTRA_KEY_TOGGLE_KEY_CODES table below.
+        put("RALT",     "R_ALT");
+        put("ALTGR",    "R_ALT");
+        put("RCTRL",    "R_CTRL");
+        put("RSHIFT",   "R_SHIFT");
+        put("RSUPER",   "R_META");
+        put("RMETA",    "R_META");
 
         // Directions are sometimes written as first and last letter for brevety
         put("LT", "LEFT");

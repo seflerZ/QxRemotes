@@ -25,6 +25,7 @@ package com.qihua.bVNC;
 
 import static com.qihua.bVNC.App.getContext;
 
+import android.animation.ValueAnimator;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -43,7 +44,9 @@ import android.gesture.GestureLibraries;
 import android.gesture.GestureLibrary;
 import android.gesture.GestureOverlayView;
 import android.gesture.Prediction;
+import android.graphics.Color;
 import android.graphics.Rect;
+import android.graphics.drawable.ColorDrawable;
 import android.hardware.display.DisplayManager;
 import android.media.AudioManager;
 import android.net.Uri;
@@ -71,6 +74,7 @@ import android.view.View;
 import android.view.View.OnGenericMotionListener;
 import android.view.View.OnKeyListener;
 import android.view.View.OnTouchListener;
+import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowManager;
@@ -248,6 +252,7 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
     private View keyboardDragHandle;
     private CustomKeyboardView customKeyboardView;
     private boolean customKeyboardEnabled;
+    private boolean customKeyboardFloating;
 
     /**
      * Helper method to get Display object based on Android version and context type
@@ -618,7 +623,15 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
                                 0, RemoteKeyboard.SCAN_LEFTSUPER);
                         break;
                     default:
-                        return;
+                        // Sticky toggle for non-modifier keys (F1-F12, arrows,
+                        // Home/End/PgUp/PgDn/Ins/Del/BkSp/Esc/Tab/Enter/Space,
+                        // R_*-modifier variants, lock keys).
+                        Integer kc = ExtraKeysConstants.PRIMARY_KEY_CODES_FOR_STRINGS.get(key);
+                        if (kc == null) kc = ExtraKeysConstants.EXTRA_KEY_TOGGLE_KEY_CODES.get(key);
+                        if (kc == null) return;
+                        evt = new KeyEvent(0, 0, down ? KeyEvent.ACTION_DOWN : KeyEvent.ACTION_UP,
+                                kc, 0, 0, 0, 0);
+                        break;
                 }
 
                 canvas.getKeyboard().keyEvent(evt.getKeyCode(), evt);
@@ -636,6 +649,10 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
         keyboardDragHandle = findViewById(R.id.keyboardDragHandle);
         if (customKeyboardEnabled && customKeyboardLayout != null) {
             setupCustomKeyboard();
+            // Restore previously chosen floating mode if any.
+            customKeyboardFloating = getSharedPreferences(Constants.generalSettingsTag, MODE_PRIVATE)
+                    .getBoolean(Constants.customKeyboardFloating, false);
+            applyFloatingLayoutParams();
         } else {
             // Container missing from this layout variant — fall back to the system IME.
             customKeyboardEnabled = false;
@@ -1220,30 +1237,85 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
         // Starts hidden; isCustomKeyboardShowing() keys off this view's visibility.
         customKeyboardView.setVisibility(View.GONE);
 
-        // Vertical-only drag, persisted as bottom-gap fraction of the screen height.
+        // Docked mode: vertical-only drag, bottom-gap persisted.
+        // Floating mode: X+Y free drag, position persisted as fractions.
+        // Stationary long-press on the handle (no movement past touchSlop before
+        // long-press timeout) toggles between docked and floating compact mode.
         keyboardDragHandle.setOnTouchListener(new View.OnTouchListener() {
-            private float dY;
+            private float dX, dY;
+            private float downX, downY;
+            private boolean movedBeyondSlop;
+            private Runnable longPressRunnable;
+            private final int touchSlop = ViewConfiguration.get(keyboardDragHandle.getContext()).getScaledTouchSlop();
 
             @Override
             public boolean onTouch(View v, MotionEvent event) {
                 View parent = (View) customKeyboardLayout.getParent();
+                SharedPreferences prefs = getSharedPreferences(Constants.generalSettingsTag, MODE_PRIVATE);
                 switch (event.getAction()) {
                     case MotionEvent.ACTION_DOWN:
+                        dX = customKeyboardLayout.getX() - event.getRawX();
                         dY = customKeyboardLayout.getY() - event.getRawY();
+                        downX = event.getRawX();
+                        downY = event.getRawY();
+                        movedBeyondSlop = false;
+                        longPressRunnable = () -> {
+                            if (movedBeyondSlop) return;
+                            if (customKeyboardFloating) {
+                                exitFloatingMiniKeyboard();
+                            } else {
+                                enterFloatingMiniKeyboard();
+                            }
+                            sendShortVibration();
+                        };
+                        v.postDelayed(longPressRunnable, ViewConfiguration.getLongPressTimeout());
                         return true;
                     case MotionEvent.ACTION_MOVE:
-                        float newY = Math.max(0, Math.min(event.getRawY() + dY,
-                                parent.getHeight() - customKeyboardLayout.getHeight()));
-                        customKeyboardLayout.setY(newY);
+                        if (!movedBeyondSlop) {
+                            float mdx = Math.abs(event.getRawX() - downX);
+                            float mdy = Math.abs(event.getRawY() - downY);
+                            if (mdx > touchSlop || mdy > touchSlop) {
+                                movedBeyondSlop = true;
+                                v.removeCallbacks(longPressRunnable);
+                            }
+                        }
+                        int parentW = parent.getWidth();
+                        int parentH = parent.getHeight();
+                        int viewW = customKeyboardLayout.getWidth();
+                        int viewH = customKeyboardLayout.getHeight();
+                        if (customKeyboardFloating) {
+                            float newX = Math.max(0, Math.min(event.getRawX() + dX, parentW - viewW));
+                            float newY = Math.max(0, Math.min(event.getRawY() + dY, parentH - viewH));
+                            customKeyboardLayout.setX(newX);
+                            customKeyboardLayout.setY(newY);
+                        } else {
+                            float newY = Math.max(0, Math.min(event.getRawY() + dY, parentH - viewH));
+                            customKeyboardLayout.setY(newY);
+                        }
                         return true;
                     case MotionEvent.ACTION_UP:
-                        if (parent.getHeight() > 0) {
-                            float bottomGap = parent.getHeight()
-                                    - (customKeyboardLayout.getY() + customKeyboardLayout.getHeight());
-                            getSharedPreferences(Constants.generalSettingsTag, MODE_PRIVATE).edit()
-                                    .putFloat(Constants.customKeyboardBottomFraction,
-                                            Math.max(0f, bottomGap) / parent.getHeight())
-                                    .apply();
+                    case MotionEvent.ACTION_CANCEL:
+                        v.removeCallbacks(longPressRunnable);
+                        if (event.getAction() == MotionEvent.ACTION_UP && parent.getHeight() > 0) {
+                            if (customKeyboardFloating) {
+                                prefs.edit()
+                                        .putFloat(Constants.customKeyboardXFraction,
+                                                parent.getWidth() > 0
+                                                        ? Math.max(0f, customKeyboardLayout.getX()) / parent.getWidth()
+                                                        : 0f)
+                                        .putFloat(Constants.customKeyboardYFraction,
+                                                parent.getHeight() > 0
+                                                        ? Math.max(0f, customKeyboardLayout.getY()) / parent.getHeight()
+                                                        : 0f)
+                                        .apply();
+                            } else {
+                                float bottomGap = parent.getHeight()
+                                        - (customKeyboardLayout.getY() + customKeyboardLayout.getHeight());
+                                prefs.edit()
+                                        .putFloat(Constants.customKeyboardBottomFraction,
+                                                Math.max(0f, bottomGap) / parent.getHeight())
+                                        .apply();
+                            }
                         }
                         return true;
                     default:
@@ -1251,6 +1323,45 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
                 }
             }
         });
+
+        setupKeyboardBackdrop();
+    }
+
+    /** Translucent backdrop dimming the canvas behind the custom keyboard while the user
+     * is typing. Alpha is 0 at rest and fades up to {@link #KEYBOARD_BACKDROP_ALPHA} on any
+     * key press, holding there for {@link #KEYBOARD_BACKDROP_RESTORE_DELAY_MS} after release. */
+    private static final int KEYBOARD_BACKDROP_ALPHA = 0x99;
+    private static final long KEYBOARD_BACKDROP_RESTORE_DELAY_MS = 3000L;
+    private static final long KEYBOARD_BACKDROP_ANIM_MS = 150L;
+    private ColorDrawable mKeyboardBackdrop;
+    private ValueAnimator mBackdropAnimator;
+    private final Runnable mRestoreBackdropRunnable = new Runnable() {
+        @Override public void run() { animateBackdropAlpha(0); }
+    };
+
+    private void setupKeyboardBackdrop() {
+        mKeyboardBackdrop = new ColorDrawable(Color.BLACK);
+        mKeyboardBackdrop.setAlpha(0);
+        customKeyboardLayout.setBackground(mKeyboardBackdrop);
+        Utils.setOnAnyKeyPressListener(pressed -> {
+            handler.removeCallbacks(mRestoreBackdropRunnable);
+            if (pressed) {
+                animateBackdropAlpha(KEYBOARD_BACKDROP_ALPHA);
+            } else {
+                handler.postDelayed(mRestoreBackdropRunnable, KEYBOARD_BACKDROP_RESTORE_DELAY_MS);
+            }
+        });
+    }
+
+    private void animateBackdropAlpha(int target) {
+        if (mKeyboardBackdrop == null) return;
+        if (mBackdropAnimator != null) mBackdropAnimator.cancel();
+        mBackdropAnimator = ValueAnimator.ofInt(mKeyboardBackdrop.getAlpha(), target);
+        mBackdropAnimator.setDuration(KEYBOARD_BACKDROP_ANIM_MS);
+        mBackdropAnimator.addUpdateListener(a -> {
+            if (mKeyboardBackdrop != null) mKeyboardBackdrop.setAlpha((Integer) a.getAnimatedValue());
+        });
+        mBackdropAnimator.start();
     }
 
     private void showCustomKeyboard() {
@@ -1267,17 +1378,112 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
         customKeyboardLayout.setVisibility(View.GONE);
         customKeyboardView.releaseShiftLatch();
         customKeyboardView.setVisibility(View.GONE);
+        handler.removeCallbacks(mRestoreBackdropRunnable);
+        animateBackdropAlpha(0);
         softKeyboardUp = false;
     }
 
     private void applyCustomKeyboardPosition() {
-        float fraction = getSharedPreferences(Constants.generalSettingsTag, MODE_PRIVATE)
-                .getFloat(Constants.customKeyboardBottomFraction, 0f);
+        SharedPreferences prefs = getSharedPreferences(Constants.generalSettingsTag, MODE_PRIVATE);
         View parent = (View) customKeyboardLayout.getParent();
+        if (customKeyboardFloating) {
+            float xf = prefs.getFloat(Constants.customKeyboardXFraction, 0.5f);
+            float yf = prefs.getFloat(Constants.customKeyboardYFraction, 0.75f);
+            int parentW = parent.getWidth();
+            int parentH = parent.getHeight();
+            int viewW = customKeyboardLayout.getWidth();
+            int viewH = customKeyboardLayout.getHeight();
+            if (parentW <= 0 || viewW <= 0) return;
+            float x = Math.max(0, Math.min(xf * parentW, parentW - viewW));
+            float y = Math.max(0, Math.min(yf * parentH, parentH - viewH));
+            customKeyboardLayout.setX(x);
+            customKeyboardLayout.setY(y);
+        } else {
+            float fraction = prefs.getFloat(Constants.customKeyboardBottomFraction, 0f);
+            int parentH = parent.getHeight();
+            int viewH = customKeyboardLayout.getHeight();
+            float y = parentH - viewH - fraction * parentH;
+            customKeyboardLayout.setY(Math.max(0, Math.min(y, parentH - viewH)));
+        }
+    }
+
+    /** Switch from split/docked bottom bar to a compact floating mini-keyboard
+     * that can be dragged to any position. Triggered by a stationary long-press
+     * on the drag handle. */
+    private void enterFloatingMiniKeyboard() {
+        if (customKeyboardFloating) return;
+        customKeyboardFloating = true;
+        applyFloatingLayoutParams();
+        recreateExtraKeys(useLandscapeExtraKeys());
+        getSharedPreferences(Constants.generalSettingsTag, MODE_PRIVATE).edit()
+                .putBoolean(Constants.customKeyboardFloating, true)
+                .apply();
+        // Re-clamp X/Y after the new width/height have been measured.
+        customKeyboardLayout.post(this::clampFloatingPosition);
+    }
+
+    private void exitFloatingMiniKeyboard() {
+        if (!customKeyboardFloating) return;
+        customKeyboardFloating = false;
+        customKeyboardLayout.setX(0);
+        applyFloatingLayoutParams();
+        recreateExtraKeys(useLandscapeExtraKeys());
+        getSharedPreferences(Constants.generalSettingsTag, MODE_PRIVATE).edit()
+                .putBoolean(Constants.customKeyboardFloating, false)
+                .apply();
+        customKeyboardLayout.post(this::applyCustomKeyboardPosition);
+    }
+
+    /** Sync layout_width of the bar and the drag handle to the current floating state.
+     * Called from enter/exit AND after recreateExtraKeys (rotation) so the params
+     * survive even when the bar's children are rebuilt. */
+    private void applyFloatingLayoutParams() {
+        if (customKeyboardLayout == null || keyboardDragHandle == null) return;
+        ViewGroup.LayoutParams layoutLp = customKeyboardLayout.getLayoutParams();
+        layoutLp.width = customKeyboardFloating
+                ? getCompactWidth()
+                : ViewGroup.LayoutParams.MATCH_PARENT;
+        customKeyboardLayout.setLayoutParams(layoutLp);
+        LinearLayout.LayoutParams handleLp =
+                (LinearLayout.LayoutParams) keyboardDragHandle.getLayoutParams();
+        if (customKeyboardFloating) {
+            handleLp.width = (int) (48 * getResources().getDisplayMetrics().density + 0.5f);
+            handleLp.gravity = Gravity.CENTER_HORIZONTAL;
+        } else {
+            handleLp.width = ViewGroup.LayoutParams.MATCH_PARENT;
+            handleLp.gravity = Gravity.NO_GRAVITY;
+        }
+        keyboardDragHandle.setLayoutParams(handleLp);
+    }
+
+    /** Natural width of the floating mini-keyboard: one key = {@link ExtraKeysView#MAX_KEY_WIDTH_DP}
+     * capped, vertical config has 7 columns. Beyond this the keys would just shrink relative
+     * to the screen, so use the parent width when it is already narrower. */
+    private static final int COMPACT_KEY_COLS = 7;
+
+    private int getCompactWidth() {
+        View parent = (View) customKeyboardLayout.getParent();
+        int parentW = (parent != null && parent.getWidth() > 0)
+                ? parent.getWidth()
+                : getResources().getDisplayMetrics().widthPixels;
+        float density = getResources().getDisplayMetrics().density;
+        int naturalW = (int) (COMPACT_KEY_COLS * ExtraKeysView.MAX_KEY_WIDTH_DP * density + 0.5f);
+        return Math.min(parentW, naturalW);
+    }
+
+    /** Clamp the floating keyboard inside its parent after a size change. */
+    private void clampFloatingPosition() {
+        if (!customKeyboardFloating) return;
+        View parent = (View) customKeyboardLayout.getParent();
+        int parentW = parent.getWidth();
         int parentH = parent.getHeight();
+        int viewW = customKeyboardLayout.getWidth();
         int viewH = customKeyboardLayout.getHeight();
-        float y = parentH - viewH - fraction * parentH;
-        customKeyboardLayout.setY(Math.max(0, Math.min(y, parentH - viewH)));
+        if (parentW <= 0 || viewW <= 0 || parentH <= 0 || viewH <= 0) return;
+        float x = Math.max(0, Math.min(customKeyboardLayout.getX(), parentW - viewW));
+        float y = Math.max(0, Math.min(customKeyboardLayout.getY(), parentH - viewH));
+        customKeyboardLayout.setX(x);
+        customKeyboardLayout.setY(y);
     }
 
     private boolean isCustomKeyboardShowing() {
@@ -1446,7 +1652,10 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
     }
 
     private void recreateExtraKeys(boolean landscape) {
-        if (landscape) {
+        // Floating mini-keyboard always uses the compact (vertical) extra-keys config
+        // so the wrapped WRAP_CONTENT bar stays small.
+        boolean useCompact = customKeyboardFloating || !landscape;
+        if (!useCompact) {
             try {
                 String config = Utils.querySharedPreferenceString(this, Constants.horizontalExtraKeysPref, ExtraKeysConstants.DEFAULT_HOR_IVALUE_EXTRA_KEYS);
                 ExtraKeysInfo extraKeysInfo = new ExtraKeysInfo(config, ExtraKeysConstants.DEFAULT_IVALUE_EXTRA_KEYS_STYLE, ExtraKeysConstants.CONTROL_CHARS_ALIASES);
@@ -1584,6 +1793,10 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
 
         // Auto change extra keys to horizontal or vertical mode
         recreateExtraKeys(useLandscapeExtraKeys());
+        // Re-apply floating-mode bar params (rotation may have reset width).
+        applyFloatingLayoutParams();
+        // Re-clamp floating X/Y since width/height of the bar just changed.
+        customKeyboardLayout.post(this::clampFloatingPosition);
 
         handler.postDelayed(() -> {
             canvas.repaint(0, 0, canvas.getWidth(), canvas.getHeight());
