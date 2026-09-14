@@ -370,9 +370,13 @@ public final class ExtraKeysView extends GridLayout {
                 final ExtraKeyButton buttonInfo = buttons[row][col];
 
                 HintButton button;
+                boolean isSticky = false;
+                SpecialButton stickyKey = null;
                 if (isSpecialButton(buttonInfo)) {
                     button = createSpecialButton(buttonInfo.getKey(), true);
                     if (button == null) return;
+                    isSticky = true;
+                    stickyKey = SpecialButton.valueOf(buttonInfo.getKey());
                 } else if (buttonInfo.isToggle()) {
                     // Sticky toggle: register key in mSpecialButtons so it
                     // gets isCreated/isActive/isLocked treatment and the
@@ -385,6 +389,8 @@ public final class ExtraKeysView extends GridLayout {
                     }
                     button = createSpecialButton(buttonInfo.getKey(), true);
                     if (button == null) return;
+                    isSticky = true;
+                    stickyKey = sb;
                 } else {
                     button = new HintButton(getContext());
                 }
@@ -393,11 +399,26 @@ public final class ExtraKeysView extends GridLayout {
                 String display = buttonInfo.getDisplay();
                 if ("VOC".equals(display)) {
                     button.showIcon(R.drawable.ic_mic_grey);
+                    // showIcon just set iconDrawable's tint to mButtonTextColor; if this is a
+                    // sticky button, re-apply state colors so the new iconDrawable picks up
+                    // the active tint instead.
+                    if (isSticky && stickyKey != null) {
+                        SpecialButtonState state = mSpecialButtons.get(stickyKey);
+                        if (state != null) {
+                            button.applyStateColors(
+                                    state.isActive ? mButtonActiveTextColor : mButtonTextColor,
+                                    state.isActive ? mButtonActiveBackgroundColor : mButtonBackgroundColor);
+                        }
+                    }
                 } else {
                     button.setText(display);
                 }
-                button.setTextColor(mButtonTextColor);
-                button.setBackgroundColor(mButtonBackgroundColor);
+                // Sticky buttons got their colors from createSpecialButton (state-driven);
+                // only plain keys need the unconditional default-color paint here.
+                if (!isSticky) {
+                    button.setTextColor(mButtonTextColor);
+                    button.setBackgroundColor(mButtonBackgroundColor);
+                }
                 button.setAllCaps(mButtonTextAllCaps);
                 button.setPadding(0, 0, 0, 0);
                 button.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
@@ -729,7 +750,9 @@ public final class ExtraKeysView extends GridLayout {
         if (state == null) return null;
         state.setIsCreated(true);
         HintButton button = new HintButton(getContext());
-        button.setTextColor(state.isActive ? mButtonActiveTextColor : mButtonTextColor);
+        button.applyStateColors(
+                state.isActive ? mButtonActiveTextColor : mButtonTextColor,
+                state.isActive ? mButtonActiveBackgroundColor : mButtonBackgroundColor);
         if (needUpdate) {
             state.buttons.add(button);
         }
@@ -758,6 +781,16 @@ public final class ExtraKeysView extends GridLayout {
             if (iconDrawable != null) {
                 iconDrawable.setTint(mButtonTextColor);
             }
+        }
+
+        /** Paint the sticky-state colors onto both the label and the icon (if any).
+         * Called after {@link #showIcon(int)} so the iconDrawable picks up the right tint. */
+        public void applyStateColors(int textColor, int bgColor) {
+            setTextColor(textColor);
+            if (iconDrawable != null) {
+                iconDrawable.setTint(textColor);
+            }
+            setBackgroundColor(bgColor);
         }
 
         @Override

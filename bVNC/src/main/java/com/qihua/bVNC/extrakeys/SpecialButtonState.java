@@ -38,8 +38,15 @@ public class SpecialButtonState {
     /** Set {@link #isActive}. */
     public void setIsActive(boolean value) {
         isActive = value;
+        int textColor = value ? mExtraKeysView.getButtonActiveTextColor() : mExtraKeysView.getButtonTextColor();
+        int bgColor = value ? mExtraKeysView.getButtonActiveBackgroundColor() : mExtraKeysView.getButtonBackgroundColor();
         for (MaterialButton button : buttons) {
-            button.setTextColor(value ? mExtraKeysView.getButtonActiveTextColor() : mExtraKeysView.getButtonTextColor());
+            if (button instanceof ExtraKeysView.HintButton) {
+                ((ExtraKeysView.HintButton) button).applyStateColors(textColor, bgColor);
+            } else {
+                button.setTextColor(textColor);
+                button.setBackgroundColor(bgColor);
+            }
         }
     }
 
