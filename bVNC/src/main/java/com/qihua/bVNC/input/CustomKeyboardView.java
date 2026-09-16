@@ -153,11 +153,13 @@ public class CustomKeyboardView extends ViewGroup {
                 p = kd('p', '0', ')');
         KeyDef z = kd('z'), x = kd('x'), c = kd('c'), v = kd('v'), b = kd('b'),
                 n = kd('n'), n_f = kd('n', '<', ','), m_f = kd('m', '>', '.'), m = kd('m');
+        KeyDef k_f = kd('k', '-', '_'), l_f = kd('l', '+', '='), z_f = kd('z', '`', '~');
+
         KeyDef[] r0 = {q, w, e, r, t, y, u, i, o, p};
         KeyDef[] r0split = {q, w, e, r, t, Y_LEFT, y, u, i, o, p, BKSP};
-        KeyDef[] r1 = {kd('a'), kd('s'), kd('d'), kd('f'), kd('g'), kd('h'), kd('j'), kd('k'), kd('l')};
+        KeyDef[] r1 = {kd('a'), kd('s'), kd('d'), kd('f'), kd('g'), kd('h'), kd('j'), k_f, l_f};
         KeyDef[] r1split = {kd('a'), kd('s'), kd('d'), kd('f'), kd('g'), kd('h'), kd('j'), kd('k'), kd('l'), ENTER};
-        KeyDef[] r2 = {z, x, c, v, b, n_f, m_f, QUESTION_F, BKSP};
+        KeyDef[] r2 = {z_f, x, c, v, b, n_f, m_f, QUESTION_F, BKSP};
         KeyDef[] r2split = {z, x, c, v, b, n, m, QUESTION, SEMI, SHIFT};
         KeyDef[] r3flat = {SHIFT, SPACE_FLAT, ENTER};
         KeyDef[] r3split = {WAVE, COMMA, SPACE_L, SPACE_R, DOT, APOSTROPHE};
