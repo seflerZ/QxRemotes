@@ -316,12 +316,11 @@ public abstract class RemoteKeyboard {
             for (KeyEvent evt : events) {
                 processLocalKeyEvent(evt.getKeyCode(), evt, additionalMetaState);
             }
-
-            return true;
         } else {
-            android.util.Log.e("RemoteKeyboard", "Could not use any keymap to generate KeyEvent for unicode: " + unicodeChar);
+            sendText(String.valueOf(unicodeChar));
         }
-        return false;
+
+        return true;
     }
 
     /**

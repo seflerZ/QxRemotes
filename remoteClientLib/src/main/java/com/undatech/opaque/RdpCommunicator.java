@@ -416,6 +416,9 @@ public class RdpCommunicator extends RemoteConnectable implements RdpKeyboardMap
         Log.v(TAG, "OnConnectionSuccess");
         reattemptWithoutCredentials = false;
         authenticationAttempted = false;
+        // Reconnect succeeded — allow future disconnects to surface as RDP_CONNECT_FAILURE
+        // again. close() inside reconnect() sets this to true and it's never reset elsewhere.
+        disconnectRequested = false;
         myself.setIsInNormalProtocol(true);
 
         viewable.onConnectionSuccess();

@@ -235,6 +235,7 @@ Valid until: %7$s
     <string name="error_rdp_authentication_failed">RDP验证失败了！ 请先确认RDP用户名和密码再重试。</string>
     <string name="error_rdp_connection_failed">RDP 网络连接被中断，服务器已停止/无效，或者将会话切换到另外用户了。</string>
     <string name="error_rdp_unable_to_connect">无法连接到RDP服务器！请确认RDP服务器设置正确，服务器已上电，RDP已有效以及服务器与该设备位于同一网络上。</string>
+    <string name="error_rdp_reconnect_failed">重连失败，已停止重试。请检查服务器和网络后再发起新连接。</string>
     <string name="error_security_type">服务器无法提供对应的安全类型。</string>
     <string name="error_spice_unable_to_connect">无法连接或认证。请确认服务器地址、密码以及CA与主题。</string>
     <string name="error_ssh_could_not_exec_command">没能执行远程命令。</string>

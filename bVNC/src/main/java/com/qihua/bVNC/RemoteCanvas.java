@@ -121,6 +121,10 @@ public class RemoteCanvas extends SurfaceView implements Viewable
     public NvCommunicator nvcomm = null;
 
     public boolean maintainConnection = true;
+    // True once the connection has been successfully established at least once.
+    // Used to distinguish "initial connect failed" from "reconnect after drop failed"
+    // for error messages shown to the user.
+    public boolean everConnected = false;
     public AbstractBitmapData bitmapData;
     // Progress dialog shown at connection time.
     public AlertDialog progressDialog;
@@ -1342,6 +1346,7 @@ public class RemoteCanvas extends SurfaceView implements Viewable
 
     @Override
     public void onConnectionSuccess() {
+        everConnected = true;
         handler.post(() -> {
             TextView messageView = progressDialog.findViewById(R.id.message);
             messageView.setText(R.string.info_continue_connected);

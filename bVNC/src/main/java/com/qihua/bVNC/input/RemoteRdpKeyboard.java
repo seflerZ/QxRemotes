@@ -82,7 +82,6 @@ public class RemoteRdpKeyboard extends RemoteKeyboard {
             return false;
         }
     }
-
     public void sendMetaKey(MetaKeyBean meta) {
         RemotePointer pointer = canvas.getPointer();
         int x = pointer.getX();

@@ -764,19 +764,16 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
             canvas.getKeyboard().keyEvent(KeyEvent.KEYCODE_MOVE_END, new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MOVE_END));
             canvas.getKeyboard().keyEvent(KeyEvent.KEYCODE_MOVE_END, new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MOVE_END));
         } else if (keys.contains("FUNC")) {
-            try {
-                char c = keys.get(keys.size() - 1).charAt(0);
-                int num = c - (c < 'a' ? '0' : ('a' - 10));
-                if (num <= 0 || num > 12) {
-                    throw new NumberFormatException();
+            if (keys.size() > 1) {
+                try {
+                    int keycode = funcCharToFKeyCode(keys.get(keys.size() - 1));
+                    if (keycode == 0) throw new NumberFormatException();
+
+                    canvas.getKeyboard().keyEvent(keycode, new KeyEvent(KeyEvent.ACTION_DOWN, keycode));
+                    canvas.getKeyboard().keyEvent(keycode, new KeyEvent(KeyEvent.ACTION_UP, keycode));
+                } catch (NumberFormatException e) {
+                    Toast.makeText(this, getText(R.string.gesture_func_num_error), Toast.LENGTH_SHORT).show();
                 }
-
-                int keycode = KeyEvent.KEYCODE_F1 + num - 1;
-
-                canvas.getKeyboard().keyEvent(keycode, new KeyEvent(KeyEvent.ACTION_DOWN, keycode));
-                canvas.getKeyboard().keyEvent(keycode, new KeyEvent(KeyEvent.ACTION_UP, keycode));
-            } catch (NumberFormatException e) {
-                Toast.makeText(this, getText(R.string.gesture_func_num_error), Toast.LENGTH_SHORT).show();
             }
         } else {
             // perform the key
@@ -786,6 +783,19 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
         }
 
         readSpecialKeysState();
+    }
+
+    /**
+     * Map a trailing digit or letter character to F1..F12. Accepts '1'..'9' for
+     * F1..F9 and 'a'..'c' for F10..F12. Returns 0 if the string does not end in
+     * a valid F-key selector.
+     */
+    private int funcCharToFKeyCode(String s) {
+        if (s == null || s.isEmpty()) return 0;
+        char c = s.charAt(s.length() - 1);
+        int num = c - (c < 'a' ? '0' : ('a' - 10));
+        if (num <= 0 || num > 12) return 0;
+        return KeyEvent.KEYCODE_F1 + num - 1;
     }
 
     @SuppressLint("SourceLockedOrientationActivity")
@@ -1211,6 +1221,18 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
         customKeyboardView.setOnKeyAction(new CustomKeyboardView.OnKeyAction() {
             @Override
             public void onKeyboardText(char c, int extraMeta) {
+                // FN toggle intercept: digits/letters from the custom keyboard also
+                // route through F1-F12 when FN is active (matches the ExtraKeys
+                // path in onExtraKeyButtonClick above).
+                if (Boolean.TRUE.equals(extraKeysView.readSpecialButton(SpecialButton.FN, true))) {
+                    int fKeyCode = funcCharToFKeyCode(String.valueOf(c));
+                    if (fKeyCode != 0) {
+                        canvas.getKeyboard().keyEvent(fKeyCode, new KeyEvent(KeyEvent.ACTION_DOWN, fKeyCode));
+                        canvas.getKeyboard().keyEvent(fKeyCode, new KeyEvent(KeyEvent.ACTION_UP, fKeyCode));
+                        return;
+                    }
+                }
+
                 // Sync extra-keys latches into keyboard meta and one-shot release them, same as onKey().
                 readSpecialKeysState();
                 canvas.getKeyboard().sendUnicode(c, canvas.getKeyboard().getMetaState() | extraMeta);
