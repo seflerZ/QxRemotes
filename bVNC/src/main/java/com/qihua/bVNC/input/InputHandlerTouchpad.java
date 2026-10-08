@@ -214,7 +214,10 @@ public class InputHandlerTouchpad extends InputHandlerGeneric {
                             activity.sendShortVibration();
                         }
 
-                        detectImmersiveSwipe(e.getX(), e.getY());
+                        // SSH: swipe anywhere = scroll, no edge-only zone.
+                        if (!(pointer instanceof RemoteSshPointer)) {
+                            detectImmersiveSwipe(e.getX(), e.getY());
+                        }
                         break;
                     case MotionEvent.ACTION_MOVE:
                         // 手指位移动量采样(松手速度 → 惯性尾巴)
@@ -263,8 +266,9 @@ public class InputHandlerTouchpad extends InputHandlerGeneric {
                             canvas.movePanToMakePointerVisible();
                         }
 
-                        // Update edge slider position during swipe
-                        if (inSwiping && System.currentTimeMillis() - lastEdgeUpdateMs >= SCROLL_SAMPLING_MS) {
+                        // Update edge slider during swipe (SSH: never shown, defensive check).
+                        if (inSwiping && !(pointer instanceof RemoteSshPointer)
+                                && System.currentTimeMillis() - lastEdgeUpdateMs >= SCROLL_SAMPLING_MS) {
                             updateActiveEdgeSlider(e.getX(), e.getY());
                             lastEdgeUpdateMs = System.currentTimeMillis();
                         }
@@ -277,7 +281,9 @@ public class InputHandlerTouchpad extends InputHandlerGeneric {
 
                         break;
                     case MotionEvent.ACTION_UP:
-                        hideEdgeViews();
+                        if (!(pointer instanceof RemoteSshPointer)) {
+                            hideEdgeViews();
+                        }
 
                         if (dragMode || rightDragMode || middleDragMode) {
                             // the mouse down event is at onDoubleTap()
@@ -522,7 +528,9 @@ public class InputHandlerTouchpad extends InputHandlerGeneric {
         boolean twoFingers = (e1.getPointerCount() == 2);
         twoFingers = twoFingers || (e2.getPointerCount() == 2);
     
-        if (!twoFingers && !immersiveSwipeX && !immersiveSwipeY) {
+        // SSH: any swipe goes through to the scroll path below (no moveMouse in terminal).
+        if (!twoFingers && !immersiveSwipeX && !immersiveSwipeY
+                && !(pointer instanceof RemoteSshPointer)) {
             if (System.currentTimeMillis() - lastScrollTimeMs < POINTER_SAMPLING_MS) {
                 return true;
             }

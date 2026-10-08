@@ -143,9 +143,11 @@ public class RemoteSshPointer extends RemotePointer {
     }
 
     /**
-     * Map a bitmap-pixel coordinate to a (row, col) in the live screen
-     * grid. Returns null if the renderer or state machine hasn't been
-     * wired yet, or if the point is outside the grid padding.
+     * Map a view-local pixel coordinate to a (row, col) in the live grid.
+     * DrawWorker draws the mbitmap at translate(-absoluteXPosition, -absoluteYPosition),
+     * so visible-at-view-Y = mbitmap-Y = pxY + absoluteYPosition. Without
+     * this shift, IME pan would pick rows too low and the selection rectangle
+     * would sit below the finger.
      */
     public int[] pxToCell(float pxX, float pxY) {
         if (sshRenderer == null || termMachine == null) {
@@ -156,8 +158,10 @@ public class RemoteSshPointer extends RemotePointer {
         int pad = sshRenderer.getPaddingPx();
         int cols = termMachine.getCols();
         int rows = termMachine.getRows();
-        float relX = pxX - pad;
-        float relY = pxY - pad;
+        float mbitmapY = pxY + canvas.absoluteYPosition;
+        float mbitmapX = pxX + canvas.absoluteXPosition;
+        float relX = mbitmapX - pad;
+        float relY = mbitmapY - pad;
         if (relX < 0f || relY < 0f) {
             // Click landed in the padding — snap to nearest edge cell.
             relX = Math.max(0f, relX);

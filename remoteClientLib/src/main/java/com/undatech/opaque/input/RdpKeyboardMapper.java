@@ -483,14 +483,9 @@ public class RdpKeyboardMapper {
             case KeyEvent.ACTION_DOWN: {
                 boolean modifierActive = isModifierPressed();
 
-                // Android auto-repeats ACTION_DOWN while a hardware key is held
-                // (~30-50Hz). Drop repeats for keys whose repeats carry no
-                // per-event content (F1-F12, arrows, ESC, modifiers). Keep
-                // repeats for keys where each press yields a discrete event:
-                //   - character keys (letters/digits/punctuation/space) — each
-                //     repeat must produce one character on the server
-                //   - editing keys (Backspace, Tab, Enter, Forward-Del) —
-                //     each repeat must trigger one delete / indent / CR
+                // Android auto-repeats ACTION_DOWN at ~30-50Hz while a key is held.
+                // Drop repeats for non-content keys (F1-F12, ESC, modifiers);
+                // keep repeats for keys where each press yields a discrete event.
                 if (isRepeat) {
                     boolean keepRepeat = event.getUnicodeChar() != 0;
                     if (!keepRepeat) {
@@ -500,6 +495,10 @@ public class RdpKeyboardMapper {
                             case VK_RETURN:
                             case VK_SPACE:
                             case VK_DELETE:
+                            case VK_LEFT:
+                            case VK_UP:
+                            case VK_RIGHT:
+                            case VK_DOWN:
                                 keepRepeat = true;
                                 break;
                         }

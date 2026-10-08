@@ -474,7 +474,9 @@ abstract class InputHandlerGeneric extends MyGestureDectector.SimpleOnGestureLis
     public void onLongPress(MotionEvent e) {
         GeneralUtils.debugLog(debugLogging, TAG, "onLongPress, e: " + e);
 
-        if (secondPointerWasDown || thirdPointerWasDown || dragMode || detectImmersiveRange(e.getX(), e.getY())) {
+        // SSH: allow long-press at edge too (range guard bypassed for SSH).
+        if (secondPointerWasDown || thirdPointerWasDown || dragMode
+                || (!isSshPointer() && detectImmersiveRange(e.getX(), e.getY()))) {
             GeneralUtils.debugLog(debugLogging, TAG,
                     "onLongPress: right/middle-click gesture in progress, not starting drag mode");
             return;
