@@ -387,6 +387,16 @@ public class RdpCommunicator extends RemoteConnectable implements RdpKeyboardMap
     }
 
     public void connect() {
+        // 整条 RDP 会话(含 MediaCodec 解码 + YUV->RGB + JNI 回调)都跑在本线程上
+        // (session.connect 是阻塞式会话循环)。实测本客户端每帧成本约 27ms,其中
+        // YUV->RGB 占 8.6ms(纯 CPU 计算),提到显示级优先级以便被调度到性能核。
+        try {
+            android.os.Process.setThreadPriority(
+                    android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY);
+        } catch (Throwable t) {
+            // 提优先级失败不影响功能
+        }
+
         // Pre-validate hostname before connecting to avoid crashes in FreeRDP
         // when DNS resolution fails (SIGBUS crash in freerdp_set_last_error_ex)
         try {
