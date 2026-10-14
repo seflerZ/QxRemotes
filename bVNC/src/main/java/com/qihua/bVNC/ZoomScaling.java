@@ -73,13 +73,12 @@ class ZoomScaling extends AbstractScaling {
      * @param canvas
      */
     private void resolveZoom(RemoteCanvas canvas) {
-        resetMatrix();
+        /* canvasXOffset/YOffset 是用 getWidth()/getHeight() 算出来的【视图空间】偏移,
+           必须在缩放【之后】平移。写成 preTranslate + postScale 的话合成顺序是
+           M = S·T,平移量会被 scaling 一起放大(245 × 1.4722 = 361),画面就偏了。 */
+        matrix.reset();
         matrix.postScale(scaling, scaling);
-//        canvas.setImageMatrix(matrix);
-//        canvas.resetScroll();
-//        canvas.relativePan(0, 0);
-//        canvas.resetScroll();
-//        canvas.relativePan(0, 0);
+        matrix.postTranslate(canvasXOffset, canvasYOffset);
         canvas.repaint(0, 0,canvas.getWidth(), canvas.getHeight());
     }
 
