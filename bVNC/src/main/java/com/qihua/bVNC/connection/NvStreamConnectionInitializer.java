@@ -33,6 +33,10 @@ import com.undatech.opaque.NvCommunicator;
 public class NvStreamConnectionInitializer extends ConnectionInitializer {
     private static final String TAG = "NvStreamConnectionInitializer";
 
+    /* 码率基准:1920x1080 时的 kbps。实际按像素数等比折算。 */
+    private static final int BITRATE_1080P_KBPS = 18000;
+    private static final int BITRATE_1080P_KBPS_REMOTE = 10000;
+
     private final Connection conn;
     private final Context ctx;
 
@@ -105,7 +109,8 @@ public class NvStreamConnectionInitializer extends ConnectionInitializer {
         prefConfig.width = remoteWidth;
         prefConfig.height = remoteHeight;
         prefConfig.enableHdr = false;
-        prefConfig.bitrate = 18000 * (remoteWidth / 1920);
+        prefConfig.bitrate = bitrateForResolution(BITRATE_1080P_KBPS, remoteWidth, remoteHeight,
+                prefConfig.fps);
         prefConfig.disableWarnings = true;
         prefConfig.incomingFrameQueueSize = 2;
         prefConfig.videoFormat = PreferenceConfiguration.FormatOption.AUTO;
@@ -115,14 +120,18 @@ public class NvStreamConnectionInitializer extends ConnectionInitializer {
 
         // reduce bitrate if on cellular connection
         if (!computerDetails.activeAddress.address.equals(computerDetails.localAddress.address)) {
-            prefConfig.bitrate = 10000 * (remoteWidth / 1920);
+            prefConfig.fps = 60;
+            prefConfig.bitrate = bitrateForResolution(BITRATE_1080P_KBPS_REMOTE, remoteWidth,
+                    remoteHeight, prefConfig.fps);
             prefConfig.framePacing = PreferenceConfiguration.FRAME_PACING_BALANCED;
             prefConfig.incomingFrameQueueSize = 3;
-            prefConfig.fps = 60;
 
             canvas.activity.runOnUiThread(() -> Toast.makeText(canvas.activity.getApplicationContext()
                     , R.string.cellular_connection_warning, Toast.LENGTH_SHORT).show());
         }
+
+        Log.i(TAG, "stream " + remoteWidth + "x" + remoteHeight + " @" + prefConfig.fps
+                + "fps -> bitrate " + prefConfig.bitrate + " kbps");
 
         canvas.nvcomm.setConnectionParameters(computerDetails.activeAddress.address,
                 computerDetails.activeAddress.port,
@@ -135,5 +144,19 @@ public class NvStreamConnectionInitializer extends ConnectionInitializer {
 
         canvas.controller = new ControllerHandler(canvas.activity, canvas.nvcomm.getConnection(),
                 canvas.activity, canvas.nvcomm.getPrefConfig());
+    }
+
+    /* 按分辨率折算码率,基准锚在 1920x1080。用像素数而不是宽度 —— 旧写法
+       18000 * (remoteWidth / 1920) 是整数除法,宽度 <1920 时直接得 0。 */
+    private static int bitrateForResolution(int baseKbps, int width, int height, int fps) {
+        long bitrate = baseKbps * ((long) width * height) / (1920L * 1080L);
+
+        if (fps > 60) {
+            bitrate = (long) (bitrate * Math.sqrt(fps / 60.0)); /* 高帧率码率不线性涨 */
+        } else if (fps > 0) {
+            bitrate = bitrate * fps / 60;
+        }
+
+        return (int) Math.max(2000, Math.min(bitrate, 100000));
     }
 }
