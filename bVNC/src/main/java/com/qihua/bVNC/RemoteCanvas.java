@@ -287,6 +287,18 @@ public class RemoteCanvas extends SurfaceView implements Viewable
 
     @Override
     public void surfaceCreated(@NonNull SurfaceHolder holder) {
+        /* 内容按 ~60fps 产出,但面板可能跑 120Hz。不声明的话 SurfaceFlinger 只能按面板
+           最高刷新率自由上屏,和 16.667ms 的 vsync 网格错相位 —— 每帧差 0.08ms,约每
+           3 秒漂出一帧,表现就是"微跳"。Moonlight 那条早就这么声明了(见
+           MediaCodecDecoderRenderer 的 setFrameRate 调用)。API 30+ 才有这个方法。 */
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            try {
+                holder.getSurface().setFrameRate(60,
+                        android.view.Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE);
+            } catch (Throwable ignored) {
+            }
+        }
+
         if (!outDisplay && touchpad) {
             drawTouchpadHint();
         }
