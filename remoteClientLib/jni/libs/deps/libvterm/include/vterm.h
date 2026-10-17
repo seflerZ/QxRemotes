@@ -260,6 +260,7 @@ typedef enum {
   VTERM_PROP_CURSORSHAPE,       // number
   VTERM_PROP_MOUSE,             // number
   VTERM_PROP_FOCUSREPORT,       // bool
+  VTERM_PROP_SYNCOUTPUT,        // bool - DEC 2026 synchronized output
 
   VTERM_N_PROPS
 } VTermProp;
