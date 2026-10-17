@@ -353,34 +353,9 @@ public class SshTerminalRenderer {
         if (c == null) {
             return 0;
         }
-        // Bottom of the cursor's cell, not the centre. The RDP pan
-        // formula wants pointerYPos to be the pixel position of "the
-        // row the user is interacting with", so that
-        // panDistance = pointerYPos + keyboardHeight - canvas.getHeight()
-        // pushes the row to exactly keyboardHeight pixels below the
-        // screen top — i.e. just above the keyboard. The cursor's
-        // centre (row * charHeight + charHeight/2) under-counted by
-        // half a cell and left the terminal content sitting one row
-        // below the keyboard top.
-        return (c.row + 2) * canvasRenderer.charHeight;
-    }
-
-    /**
-     * Y pixel of the bottom edge of the live grid in mbitmap coordinates.
-     * Used by the SSH IME push-up path as the RDP-equivalent
-     * "scroll-to-bottom" anchor — {@code repanCanvas4SSH} takes
-     * {@code max(cursorY, terminalBottomY)} as the pan anchor so the
-     * whole grid (including rows below the cursor) stays visible above
-     * the IME instead of being scrolled off-screen when the cursor is
-     * in the upper half. Returns 0 if the renderer hasn't opened yet.
-     */
-    public int getTerminalBottomY() {
-        if (canvasRenderer == null || stateMachine == null) {
-            return 0;
-        }
-        // rows is set by renderInto on every size change, so it always
-        // matches the current cols/rows of the state machine.
-        return stateMachine.getRows() * canvasRenderer.charHeight;
+        // Cursor cell bottom in mbitmap px, padding included — row 0 must
+        // report its real position or the IME pan pushes it off-screen.
+        return canvasRenderer.paddingPx + (c.row + 1) * canvasRenderer.charHeight;
     }
 
     public void close() {

@@ -378,11 +378,6 @@ public class SshConnectionInitializer extends ConnectionInitializer {
         return renderer != null ? renderer.getCursorPixelY() : 0;
     }
 
-    /** Bottom of live grid in mbitmap pixels — used when cursor is in upper half. */
-    public int getTerminalBottomY() {
-        return renderer != null ? renderer.getTerminalBottomY() : 0;
-    }
-
     /** Re-apply AppCompat day/night palette + reseed mbitmap. Safe pre-start. */
     public void applyTheme() {
         if (renderer == null) return;

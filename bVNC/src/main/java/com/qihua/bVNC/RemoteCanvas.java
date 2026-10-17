@@ -43,6 +43,8 @@ import android.graphics.Typeface;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
 import android.text.ClipboardManager;
 import android.text.InputType;
 import android.util.AttributeSet;
@@ -91,7 +93,9 @@ import com.undatech.opaque.SpiceCommunicator;
 import com.undatech.opaque.Viewable;
 
 import java.io.IOException;
+import java.util.Date;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Timer;
 
@@ -225,6 +229,36 @@ public class RemoteCanvas extends SurfaceView implements Viewable
     private boolean touchpad = false;
     public RemoteCanvasActivity activity;
 
+    // --- Idle clock on the phone-side touchpad (external display mode) ---
+    private static final long IDLE_CLOCK_TIMEOUT_MS = 60 * 1000L;
+    private final Handler idleHandler = new Handler(Looper.getMainLooper());
+    private boolean clockShowing = false;
+    private boolean clockDismissGesture = false;
+    private int surfaceWidth, surfaceHeight;
+    private long clockStartMs = 0L;
+    private final Paint clockBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private static final long CLOCK_FRAME_MS = 250L;
+
+    private final Runnable clockTick = new Runnable() {
+        @Override
+        public void run() {
+            if (!clockShowing) return;
+            drawClock();
+            idleHandler.postDelayed(this, CLOCK_FRAME_MS);
+        }
+    };
+
+    private final Runnable showIdleClock = new Runnable() {
+        @Override
+        public void run() {
+            if (outDisplay || !touchpad || !isAttachedToWindow()) return;
+            clockShowing = true;
+            clockStartMs = SystemClock.uptimeMillis();
+            drawClock();
+            idleHandler.postDelayed(clockTick, CLOCK_FRAME_MS);
+        }
+    };
+
     /**
      * Constructor used by the inflation apparatus
      *
@@ -300,15 +334,62 @@ public class RemoteCanvas extends SurfaceView implements Viewable
         }
 
         if (!outDisplay && touchpad) {
-            drawTouchpadHint();
+            Rect frame = holder.getSurfaceFrame();
+            surfaceWidth = frame != null && frame.width() > 0 ? frame.width() : getWidth();
+            surfaceHeight = frame != null && frame.height() > 0 ? frame.height() : getHeight();
+            if (clockShowing) {
+                drawClock();
+            } else {
+                drawTouchpadHint();
+            }
+            noteUserInteraction();
         }
     }
 
     @Override
     public void surfaceChanged(@NonNull SurfaceHolder holder, int format, int width, int height) {
         if (!outDisplay && touchpad) {
-            drawTouchpadHint(width, height);
+            surfaceWidth = width;
+            surfaceHeight = height;
+            if (clockShowing) {
+                drawClock(width, height);
+            } else {
+                drawTouchpadHint(width, height);
+            }
         }
+    }
+
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent event) {
+        if (!outDisplay && touchpad) {
+            if (clockShowing) {
+                hideIdleClock();
+                clockDismissGesture = true;
+                return true;
+            }
+            if (clockDismissGesture) {
+                // Swallow the rest of the tap that dismissed the clock so it
+                // doesn't land as a remote click.
+                if (event.getActionMasked() == MotionEvent.ACTION_UP
+                        || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+                    clockDismissGesture = false;
+                }
+                return true;
+            }
+            noteUserInteraction();
+        }
+        return super.dispatchTouchEvent(event);
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        if (!outDisplay && touchpad) {
+            if (clockShowing) {
+                hideIdleClock();
+            }
+            noteUserInteraction();
+        }
+        return super.dispatchKeyEvent(event);
     }
 
     /**
@@ -343,13 +424,11 @@ public class RemoteCanvas extends SurfaceView implements Viewable
     }
 
     @Override
-    public boolean dispatchKeyEvent(KeyEvent event) {
-        return super.dispatchKeyEvent(event);
-    }
-
-    @Override
     public void surfaceDestroyed(@NonNull SurfaceHolder holder) {
         isRunning = false;
+        idleHandler.removeCallbacks(showIdleClock);
+        idleHandler.removeCallbacks(clockTick);
+        clockShowing = false;
     }
 
     void init(final Connection settings, final Handler handler, final Runnable setModes, final Runnable hideKeyboardAndExtraKeys, final String vvFileName) {
@@ -1749,7 +1828,16 @@ public class RemoteCanvas extends SurfaceView implements Viewable
     }
 
     public void drawTouchpadHint() {
-        drawTouchpadHint(displayRect.width(), displayRect.height());
+        // Use the surface's own size: displayRect is the panel's natural
+        // (portrait) size and is wrong after rotation, which shifted the
+        // hint off-centre horizontally.
+        int w = surfaceWidth > 0 ? surfaceWidth : getWidth();
+        int h = surfaceHeight > 0 ? surfaceHeight : getHeight();
+        if (w <= 0 && displayRect != null) {
+            w = displayRect.width();
+            h = displayRect.height();
+        }
+        drawTouchpadHint(w, h);
     }
 
     public void drawTouchpadHint(int width, int height) {
@@ -1758,6 +1846,7 @@ public class RemoteCanvas extends SurfaceView implements Viewable
         Typeface font = Typeface.create(Typeface.DEFAULT, Typeface.BOLD);
         paint.setTypeface(font);
         paint.setTextSize(64);
+        paint.setTextAlign(Paint.Align.CENTER);
 
         paint.setColor(0x33ffffff);
 
@@ -1767,11 +1856,11 @@ public class RemoteCanvas extends SurfaceView implements Viewable
             if (canvas != null) {
                 synchronized (surfaceHolder) {
                     String text = getContext().getString(R.string.use_as_touchpad);
-                    float textWidth = paint.measureText(text);
-                    float x = (width - textWidth) / 2f;
+                    Paint.FontMetrics fm = paint.getFontMetrics();
+                    float y = height / 2f - (fm.ascent + fm.descent) / 2f;
 
                     canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR);
-                    canvas.drawText(text, x, height / 2f, paint);
+                    canvas.drawText(text, width / 2f, y, paint);
                 }
             }
         } finally {
@@ -1779,6 +1868,126 @@ public class RemoteCanvas extends SurfaceView implements Viewable
                 surfaceHolder.unlockCanvasAndPost(canvas);
             }
         }
+    }
+
+    /** True for the phone-side touchpad view created in external display mode. */
+    public boolean isPhoneTouchpad() {
+        return !outDisplay && touchpad;
+    }
+
+    /** True while the idle clock is drawn on the phone touchpad. */
+    public boolean isClockShowing() {
+        return clockShowing;
+    }
+
+    /** (Re)arm the idle clock; called on every touch/key on the phone. */
+    public void noteUserInteraction() {
+        idleHandler.removeCallbacks(showIdleClock);
+        if (!outDisplay && touchpad) {
+            idleHandler.postDelayed(showIdleClock, IDLE_CLOCK_TIMEOUT_MS);
+        }
+    }
+
+    /** Dismiss the clock and restore the touchpad hint. Returns true if it was showing. */
+    public boolean hideIdleClock() {
+        if (!clockShowing) return false;
+        clockShowing = false;
+        idleHandler.removeCallbacks(clockTick);
+        drawTouchpadHint();
+        noteUserInteraction();
+        return true;
+    }
+
+    private void drawClock() {
+        int w = surfaceWidth, h = surfaceHeight;
+        if (w <= 0 && displayRect != null) {
+            w = displayRect.width();
+            h = displayRect.height();
+        }
+        if (w <= 0) {
+            w = getWidth();
+            h = getHeight();
+        }
+        drawClock(w, h);
+    }
+
+    /** Calendar-style idle clock: huge HH:mm with the date above it. */
+    private void drawClock(int width, int height) {
+        if (width <= 0 || height <= 0) return;
+        Canvas canvas = null;
+        try {
+            canvas = surfaceHolder.lockHardwareCanvas();
+            if (canvas == null) return;
+            synchronized (surfaceHolder) {
+                drawClockBackground(canvas, width, height);
+
+                Date now = new Date();
+                String time = android.text.format.DateFormat.getTimeFormat(getContext()).format(now);
+                String date = new java.text.SimpleDateFormat(
+                        android.text.format.DateFormat.getBestDateTimePattern(
+                                Locale.getDefault(), "MMMEd"),
+                        Locale.getDefault()).format(now);
+
+                Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+                paint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.NORMAL));
+                paint.setTextAlign(Paint.Align.CENTER);
+                float cx = width / 2f;
+
+                float dateSize = Math.min(width, height) * 0.065f;
+                paint.setColor(0xffa8adb6);
+                paint.setTextSize(dateSize);
+                float dateWidth = paint.measureText(date);
+                if (dateWidth > width * 0.9f) {
+                    paint.setTextSize(dateSize * width * 0.9f / dateWidth);
+                }
+                canvas.drawText(date, cx, height * 0.33f, paint);
+
+                paint.setColor(0xffd2d4d8);
+                float timeSize = Math.min(width, height) * 0.30f;
+                paint.setTextSize(timeSize);
+                float timeWidth = paint.measureText(time);
+                if (timeWidth > width * 0.9f) {
+                    timeSize *= width * 0.9f / timeWidth;
+                    paint.setTextSize(timeSize);
+                }
+                Paint.FontMetrics fm = paint.getFontMetrics();
+                float baseline = height * 0.57f - (fm.ascent + fm.descent) / 2f;
+                canvas.drawText(time, cx, baseline, paint);
+            }
+        } finally {
+            if (canvas != null) {
+                surfaceHolder.unlockCanvasAndPost(canvas);
+            }
+        }
+    }
+
+    /** Slow, dark aurora drift behind the clock — magazine-wallpaper vibe. */
+    private void drawClockBackground(Canvas canvas, int width, int height) {
+        canvas.drawColor(0xff05060a);
+
+        float t = (SystemClock.uptimeMillis() - clockStartMs) / 1000f;
+        float min = Math.min(width, height);
+
+        drawGlow(canvas, width, height,
+                width * (0.32f + 0.10f * (float) Math.sin(t * 0.13f)),
+                height * (0.36f + 0.10f * (float) Math.cos(t * 0.10f)),
+                min * (0.85f + 0.06f * (float) Math.sin(t * 0.08f)), 0x8a2b5fd0);
+        drawGlow(canvas, width, height,
+                width * (0.70f + 0.10f * (float) Math.cos(t * 0.11f + 1.7f)),
+                height * (0.62f + 0.10f * (float) Math.sin(t * 0.09f)),
+                min * (0.75f + 0.05f * (float) Math.cos(t * 0.07f)), 0x7c6a35c8);
+        drawGlow(canvas, width, height,
+                width * (0.50f + 0.12f * (float) Math.sin(t * 0.07f + 2.4f)),
+                height * (0.22f + 0.10f * (float) Math.cos(t * 0.10f + 0.8f)),
+                min * (0.65f + 0.05f * (float) Math.sin(t * 0.06f + 1.2f)), 0x6612a89a);
+    }
+
+    private void drawGlow(Canvas canvas, int width, int height,
+                          float cx, float cy, float radius, int color) {
+        clockBgPaint.setShader(new android.graphics.RadialGradient(
+                cx, cy, radius, color, color & 0x00ffffff,
+                android.graphics.Shader.TileMode.CLAMP));
+        canvas.drawRect(0f, 0f, width, height, clockBgPaint);
     }
 
     public long getLastDrawMs() {

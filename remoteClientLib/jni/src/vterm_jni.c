@@ -48,9 +48,8 @@ typedef struct {
     VTermScreen  *vts;
     int           rows;
     int           cols;
-    // Cursor pos cached from VTermState (libvterm doesn't put cursor
-    // in VTermScreenCell; we read it via vterm_state_get_cursorpos
-    // on every cursor query).
+    // Cursor visibility cache (updated by the movecursor callback).
+    // Position is queried live in nativeGetCursor.
     int           cursor_row;
     int           cursor_col;
     int           cursor_visible;
@@ -857,8 +856,13 @@ Java_com_qihua_bVNC_ssh_libvterm_SshTermStateMachine_nativeGetCursor(
     jfieldID fcol = (*env)->GetFieldID(env, cls, "col", "I");
     jfieldID fvis = (*env)->GetFieldID(env, cls, "visible", "Z");
 
-    (*env)->SetIntField(env, obj, frow, h->cursor_row);
-    (*env)->SetIntField(env, obj, fcol, h->cursor_col);
+    // Query live: the callback cache is stale after an alt-screen switch
+    // until the program's next cursor move (tmux startup).
+    VTermPos pos;
+    vterm_state_get_cursorpos(vterm_screen_get_state(h->vts), &pos);
+
+    (*env)->SetIntField(env, obj, frow, pos.row);
+    (*env)->SetIntField(env, obj, fcol, pos.col);
     (*env)->SetBooleanField(env, obj, fvis, h->cursor_visible ? JNI_TRUE : JNI_FALSE);
 
     return obj;

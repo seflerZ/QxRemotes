@@ -244,6 +244,8 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
     // transient flicker and ignored.
     private long cursorStateChangedAt = 0L;
     private static final long CURSOR_SETTLE_MS = 200L;
+    /** Coalesces the deferred re-pan posted when a settle window swallows a repan. */
+    private boolean repanRetryScheduled = false;
     private ExtraKeysView extraKeysView;
     private int keyboardHeight;
     private static final String PREFS_INPUT_TIPS = "input_mode_tips";
@@ -510,8 +512,7 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
                 if (isToolbarShow) {
                     SshConnectionInitializer ssh =
                             (SshConnectionInitializer) canvas.connInitializer;
-                    float anchorY = Math.max(ssh.getCursorPixelY(), ssh.getTerminalBottomY());
-                    cursorIsInKeyboard = anchorY + keyboardHeight - canvas.getHeight() > 0;
+                    cursorIsInKeyboard = ssh.getCursorPixelY() + keyboardHeight - canvas.getHeight() > 0;
                     cursorStateChangedAt = 0L;
                 }
                 repanCanvas4SSH(isToolbarShow);
@@ -2242,6 +2243,16 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
     @Override
     public boolean dispatchTouchEvent(MotionEvent event) {
         try {
+            // Activity-level hook: the input handler below consumes most
+            // touches before they reach the touchpad view, so the idle clock
+            // is tracked here instead of in RemoteCanvas.dispatchTouchEvent.
+            if (touchpad != null && touchpad.isPhoneTouchpad()) {
+                if (touchpad.hideIdleClock()) {
+                    return true; // a tap dismissing the clock is not a remote click
+                }
+                touchpad.noteUserInteraction();
+            }
+
             int x = (int) event.getX();
             int y = (int) event.getY();
 
@@ -2280,6 +2291,12 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
     @Override
     public boolean onGenericMotionEvent(MotionEvent event) {
         try {
+            if (touchpad != null && touchpad.isPhoneTouchpad()) {
+                if (touchpad.hideIdleClock()) {
+                    return true;
+                }
+                touchpad.noteUserInteraction();
+            }
             return inputHandler.onTouchEvent(event);
         } catch (Exception ignored) {
         }
@@ -2366,27 +2383,14 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
     }
 
     /**
-     * SSH cursor-aware IME push-up. Uses libvterm cursor Y instead of
-     * pointer Y (RemoteSshPointer is a no-op), but clamped against the
-     * terminal bottom — same RDP "scroll-to-bottom" semantics:
-     *   anchor = max(cursorY, terminalBottomY)
-     *   pan    = anchor + keyboardHeight - canvasHeight
-     * When the cursor sits in the upper half of the grid, anchoring to
-     * the cursor alone would push the rows below the cursor off-screen;
-     * anchoring to the bottom keeps the whole grid visible above the
-     * IME. When the cursor is in the last row(s), cursorY ≈ terminalBottomY
-     * and the two are equivalent. Idempotent across IME-animation fires
-     * and content-update re-fires (undo+apply net to zero when neither
-     * anchor nor keyboardHeight changes). Must run on the main thread —
-     * touches absoluteYPosition / relativePan.
+     * SSH cursor-aware IME push-up: pan just enough to keep the cursor
+     * above the keyboard. Anchoring to the grid bottom instead panned a
+     * full keyboard height and pushed a top-row cursor off-screen.
      */
     public void repanCanvas4SSH(boolean isShow) {
         com.qihua.bVNC.connection.SshConnectionInitializer ssh =
                 (com.qihua.bVNC.connection.SshConnectionInitializer) canvas.connInitializer;
-        float cursorY = ssh.getCursorPixelY();
-        float terminalBottomY = ssh.getTerminalBottomY();
-        float anchorY = Math.max(cursorY, terminalBottomY);
-        float panDistance = anchorY + keyboardHeight - canvas.getHeight();
+        float panDistance = ssh.getCursorPixelY() + keyboardHeight - canvas.getHeight();
 
         if (isShow) {
             boolean nowInKeyboard = panDistance > 0;
@@ -2399,11 +2403,13 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
                 // every REPAN and cause the visible flicker.
                 cursorIsInKeyboard = nowInKeyboard;
                 cursorStateChangedAt = System.currentTimeMillis();
+                scheduleRepanRetry();
                 return;
             }
             if (System.currentTimeMillis() - cursorStateChangedAt < CURSOR_SETTLE_MS) {
                 // Same zone as last call but hasn't been stable long
                 // enough — keep the previous pan.
+                scheduleRepanRetry();
                 return;
             }
             if (panDistance > 0) {
@@ -2425,6 +2431,23 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
             cursorIsInKeyboard = false;
             cursorStateChangedAt = 0L;
         }
+    }
+
+    /**
+     * A repan swallowed by the settle window must still be applied once
+     * output stops — the update callback only re-posts on cursor motion,
+     * so a cursor that lands in the occluded band and then goes quiet
+     * would otherwise stay hidden behind the keyboard.
+     */
+    private void scheduleRepanRetry() {
+        if (repanRetryScheduled) return;
+        repanRetryScheduled = true;
+        handler.postDelayed(() -> {
+            repanRetryScheduled = false;
+            if (isSoftKeyboardUp()) {
+                repanCanvas4SSH(true);
+            }
+        }, CURSOR_SETTLE_MS + 20);
     }
 
     public void showKeyboard() {
