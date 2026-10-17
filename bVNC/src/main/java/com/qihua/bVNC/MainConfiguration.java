@@ -14,17 +14,21 @@ import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewConfiguration;
+import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.RadioGroup;
+import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowInsetsCompat;
 
 import com.qihua.bVNC.util.SmartResolutionUtils;
 import com.qihua.pubkeygenerator.GeneratePubkeyActivity;
@@ -185,6 +189,7 @@ public abstract class MainConfiguration extends AppCompatActivity {
         super.onCreate(icicle);
         Utils.showMenu(this);
         setContentView(layoutID);
+        applyImeInsetsToScrollView();
 
         setTitle(R.string.configure_connection);
 
@@ -370,6 +375,36 @@ public abstract class MainConfiguration extends AppCompatActivity {
         Intent intent = new Intent(this, GeneratePubkeyActivity.class);
         intent.putExtra("PrivateKey", selected.getSshPrivKey());
         startActivityForResult(intent, Constants.ACTIVITY_GEN_KEY);
+    }
+
+    /**
+     * Config pages are ScrollViews, but adjustResize stops shifting content
+     * on edge-to-edge targets and is ignored in multi-window, leaving the
+     * lower fields under the keyboard. Pad the ScrollView by the IME inset
+     * so everything can scroll clear.
+     */
+    private void applyImeInsetsToScrollView() {
+        ScrollView scroll = findScrollView(findViewById(android.R.id.content));
+        if (scroll == null) return;
+        final int baseBottom = scroll.getPaddingBottom();
+        ViewCompat.setOnApplyWindowInsetsListener(scroll, (v, insets) -> {
+            int ime = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom;
+            v.setPadding(v.getPaddingLeft(), v.getPaddingTop(), v.getPaddingRight(), baseBottom + ime);
+            return insets;
+        });
+        ViewCompat.requestApplyInsets(scroll);
+    }
+
+    private static ScrollView findScrollView(View view) {
+        if (view instanceof ScrollView) return (ScrollView) view;
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                ScrollView found = findScrollView(group.getChildAt(i));
+                if (found != null) return found;
+            }
+        }
+        return null;
     }
 
     /**
