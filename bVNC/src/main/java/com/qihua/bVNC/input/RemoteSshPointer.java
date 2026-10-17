@@ -45,6 +45,14 @@ public class RemoteSshPointer extends RemotePointer {
      */
     private static final float TOUCH_SCROLL_SCALE = 3.0f;
 
+    /**
+     * Finger-travel pixels per emitted wheel notch when mouse mode is on.
+     * Decoded magnitudes are already scaled by TOUCH_SCROLL_SCALE, so 3
+     * rows (charH ~53px) worth of travel emits one SGR wheel tick.
+     */
+    private static final float WHEEL_NOTCH_PX = 160f;
+    private float wheelAccumPx = 0f;
+
     private SshTermStateMachine termMachine;
     private Runnable requestRepaint;
     // Back-reference to the renderer so px↔cell conversion works from
@@ -81,25 +89,90 @@ public class RemoteSshPointer extends RemotePointer {
 
     @Override
     public void leftButtonDown(int x, int y, int metaState) {
+        sendMouseButton(1, x, y, true, metaState);
     }
 
     @Override
     public void middleButtonDown(int x, int y, int metaState) {
+        sendMouseButton(2, x, y, true, metaState);
     }
 
     @Override
     public void rightButtonDown(int x, int y, int metaState) {
+        sendMouseButton(3, x, y, true, metaState);
+    }
+
+    /**
+     * Convert a scroll gesture into SGR wheel events. Used both for the
+     * discrete mouse wheel (speed == -1, one notch each) and for
+     * two-finger swipes (speed != -1, accumulated by finger travel so we
+     * don't flood the SSH channel with one event per 30ms sample).
+     *
+     * @param dir +1 = wheel up, -1 = wheel down
+     */
+    private void forwardWheel(int dir, int x, int y, int speed, int metaState) {
+        if (speed == -1) {
+            sendWheelNotch(dir, x, y, metaState);
+            return;
+        }
+        float mag = decodeTouchMagnitude(speed, dir > 0);
+        if (wheelAccumPx != 0f && (wheelAccumPx > 0f) != (dir > 0)) {
+            wheelAccumPx = 0f;  // direction flipped — drop the stale remainder
+        }
+        wheelAccumPx += dir * mag;
+        int notches = (int) (Math.abs(wheelAccumPx) / WHEEL_NOTCH_PX);
+        if (notches <= 0) return;
+        wheelAccumPx -= dir * notches * WHEEL_NOTCH_PX;
+        if (notches > 6) notches = 6;  // burst cap
+        for (int i = 0; i < notches; i++) {
+            sendWheelNotch(dir, x, y, metaState);
+        }
+    }
+
+    private void sendWheelNotch(int dir, int x, int y, int metaState) {
+        int button = dir > 0 ? 4 : 5;  // libvterm: 4=up, 5=down
+        sendMouseButton(button, x, y, true, metaState);
+        sendMouseButton(button, x, y, false, 0);
     }
 
     @Override
     public void scrollUp(int x, int y, int speed, int metaState) {
         if (termMachine == null) return;
+        // Mouse mode (tmux/vim/less) → forward everything as SGR wheel so
+        // the app scrolls its own buffer. Plain shell → local scrollback.
+        if (termMachine.isMouseModeEnabled()) {
+            forwardWheel(+1, x, y, speed, metaState);
+            return;
+        }
         if (speed == -1) {
             termMachine.scrollByLines(+MOUSE_WHEEL_LINES);
         } else {
             termMachine.scrollByPixels(+decodeTouchMagnitude(speed, true));
         }
         if (requestRepaint != null) requestRepaint.run();
+    }
+
+    /**
+     * Forward a mouse button event into the SSH terminal. No-op when
+     * the remote app hasn't enabled DECSET 1000 (mouse mode off) — in
+     * that case wheel/click would be ignored by libvterm anyway, and
+     * silently dropping here keeps the local pointer model clean. The
+     * release side of releaseButton() always passes pressed=false with
+     * mods=0 since modifiers don't apply to release events.
+     */
+    private void sendMouseButton(int button, int x, int y, boolean pressed, int metaState) {
+        if (termMachine == null) {
+            return;
+        }
+        if (!termMachine.isMouseModeEnabled()) {
+            return;
+        }
+        int[] cell = pxToCell(x, y);
+        if (cell == null) {
+            return;
+        }
+        int mods = pressed ? RemoteSshKeyboard.metaToVtermMods(metaState) : 0;
+        termMachine.sendMouse(button, cell[0], cell[1], pressed, mods);
     }
 
     // ===== SSH text-selection API (Phase 2) =====
@@ -320,6 +393,10 @@ public class RemoteSshPointer extends RemotePointer {
     @Override
     public void scrollDown(int x, int y, int speed, int metaState) {
         if (termMachine == null) return;
+        if (termMachine.isMouseModeEnabled()) {
+            forwardWheel(-1, x, y, speed, metaState);
+            return;
+        }
         if (speed == -1) {
             termMachine.scrollByLines(-MOUSE_WHEEL_LINES);
         } else {
@@ -363,6 +440,14 @@ public class RemoteSshPointer extends RemotePointer {
 
     @Override
     public void releaseButton(int x, int y, int metaState) {
+        if (termMachine == null || !termMachine.isMouseModeEnabled()) return;
+        // releaseButton doesn't carry which button went up — fire
+        // release=false for all three. libvterm drops repeated releases
+        // (mouse.c:87 short-circuits when the bit was already off), so
+        // the extra two calls are a no-op on the wire.
+        sendMouseButton(1, x, y, false, 0);
+        sendMouseButton(2, x, y, false, 0);
+        sendMouseButton(3, x, y, false, 0);
     }
 
     @Override

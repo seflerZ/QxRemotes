@@ -265,6 +265,12 @@ abstract class InputHandlerGeneric extends MyGestureDectector.SimpleOnGestureLis
      * @return the appropriate X coordinate.
      */
     protected int getDragPointerX(MotionEvent e) {
+        // SSH: terminal has no movable cursor — the pointer stays at (0,0),
+        // and canvas.getAbsX() is calibrated for RDP/VNC. The SSH renderer's
+        // pxToCell expects raw view-space coordinates.
+        if (canvas.getProtocolType() == ProtocolType.SSH) {
+            return (int) e.getX();
+        }
         float scale = canvas.getZoomFactor();
         return (int) (canvas.getAbsX() + e.getX() / scale);
     }
@@ -278,6 +284,9 @@ abstract class InputHandlerGeneric extends MyGestureDectector.SimpleOnGestureLis
      * @return the appropriate Y coordinate.
      */
     protected int getDragPointerY(MotionEvent e) {
+        if (canvas.getProtocolType() == ProtocolType.SSH) {
+            return (int) e.getY();
+        }
         float scale = canvas.getZoomFactor();
         return (int) (canvas.getAbsY() + (e.getY() - 1.f * canvas.getTop()) / scale);
     }

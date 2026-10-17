@@ -247,6 +247,49 @@ public final class SshTermStateMachine {
         }
     }
 
+    /**
+     * True iff the remote app has turned on DECSET 1000 (click reporting).
+     * Used by the input path to route wheel/click through {@link #sendMouse}
+     * when the app asked for SGR/X10/RXVT mouse, and fall back to the
+     * local scrollback offset otherwise.
+     */
+    public boolean isMouseModeEnabled() {
+        synchronized (this) {
+            if (nativeHandle == 0) return false;
+            return nativeIsMouseEnabled(nativeHandle);
+        }
+    }
+
+    /**
+     * Forward a mouse event into libvterm. libvterm will emit the
+     * terminal-protocol byte sequence (\e[<code;col+1;row+1M for SGR,
+     * etc.) into the output buffer, which we drain and write to the SSH
+     * channel's stdin — same pipeline as {@link #writeInput}.
+     *
+     * <p>{@code button}: 1=left, 2=middle, 3=right, 4=wheel-up,
+     * 5=wheel-down. {@code row}/{@code col} are 0-based, matching the
+     * values {@code RemoteSshPointer.pxToCell} returns.
+     *
+     * <p>Caller should guard with {@link #isMouseModeEnabled()} — the
+     * native side does the same gate internally, but checking in Java
+     * avoids the synchronized entry on every scroll tick.
+     */
+    public void sendMouse(int button, int row, int col, boolean pressed, int mods) {
+        byte[] out;
+        synchronized (this) {
+            if (nativeHandle == 0) return;
+            out = nativeSendMouseButton(nativeHandle, button, pressed, row, col, mods);
+        }
+        if (out != null && out.length > 0 && outputSink != null) {
+            try {
+                outputSink.write(out);
+                outputSink.flush();
+            } catch (IOException e) {
+                Log.w(TAG, "sendMouse: failed to forward to SSH stdin", e);
+            }
+        }
+    }
+
     /** Drain all dirty rows into {@code outRows}. Returns the number
      * of rows written. After this call {@link #pollDirty()} returns
      * false until libvterm reports new damage.
@@ -483,6 +526,8 @@ public final class SshTermStateMachine {
     private static native byte[] nativeWriteKey(long h, int key, int mods);
     private static native byte[] nativeDrainOutput(long h);
     private static native boolean nativeIsSyncOutput(long h);
+    private static native boolean nativeIsMouseEnabled(long h);
+    private static native byte[] nativeSendMouseButton(long h, int button, boolean pressed, int row, int col, int mods);
 
     private static native boolean nativePollDirty(long h);
     private static native int   nativeTakeDirtyRows(long h, int[] outRows);

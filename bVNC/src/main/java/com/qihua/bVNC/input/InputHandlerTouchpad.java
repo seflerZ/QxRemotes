@@ -692,6 +692,12 @@ public class InputHandlerTouchpad extends InputHandlerGeneric {
     }
 
     protected int getDragPointerX(MotionEvent e) {
+        // SSH: the terminal pointer never moves (moveMouse is a no-op), so
+        // the default would return a stale (0,0) for every event and every
+        // click/wheel would land on the top-left cell.
+        if (pointer instanceof RemoteSshPointer) {
+            return (int) e.getX();
+        }
         RemotePointer p = canvas.getPointer();
         if (dragMode || rightDragMode || middleDragMode) {
             float distanceX = 0;
@@ -709,6 +715,9 @@ public class InputHandlerTouchpad extends InputHandlerGeneric {
     }
 
     protected int getDragPointerY(MotionEvent e) {
+        if (pointer instanceof RemoteSshPointer) {
+            return (int) e.getY();
+        }
         RemotePointer p = canvas.getPointer();
         if (dragMode || rightDragMode || middleDragMode) {
             float distanceY = 0;

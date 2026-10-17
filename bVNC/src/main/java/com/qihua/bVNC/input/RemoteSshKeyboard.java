@@ -241,7 +241,7 @@ public class RemoteSshKeyboard extends RemoteKeyboard {
      * CTRL). Uses the combined MASK constants so left/right variants are
      * covered. Sym and function modifiers are ignored.
      */
-    private static int metaToVtermMods(int meta) {
+    public static int metaToVtermMods(int meta) {
         int mods = SshTermStateMachine.MOD_NONE;
         if ((meta & KeyEvent.META_SHIFT_MASK) != 0)
             mods |= SshTermStateMachine.MOD_SHIFT;
