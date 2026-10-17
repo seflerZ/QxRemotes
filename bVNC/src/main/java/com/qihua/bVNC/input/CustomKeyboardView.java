@@ -133,15 +133,12 @@ public class CustomKeyboardView extends ViewGroup {
     private static final KeyDef SEMI = kd(';', ':');
     private static final KeyDef QUESTION = kd('?', '/');
     private static final KeyDef QUESTION_F = kd('?', '/', '\\');
-    private static final KeyDef HYPHEN = kd('-', '_');
     private static final KeyDef WAVE = kd('`', '~');
     private static final KeyDef APOSTROPHE = kd('\'', '"');
     /** Split row 2 puts b on both halves — either thumb may hit it. */
     private static final KeyDef B_RIGHT = kd('b');
     /** Split row 0 duplicates y so either thumb can hit it; mirrors the regular y's swipes. */
     private static final KeyDef Y_LEFT = kd('y', '6', '^');
-
-    private static final KeyDef SLASH = kd('\\', '|');
 
     private static final Row[] ROWS_FLAT;
     private static final Row[] ROWS_SPLIT;
@@ -158,9 +155,9 @@ public class CustomKeyboardView extends ViewGroup {
         KeyDef[] r0 = {q, w, e, r, t, y, u, i, o, p};
         KeyDef[] r0split = {q, w, e, r, t, Y_LEFT, y, u, i, o, p, BKSP};
         KeyDef[] r1 = {kd('a'), kd('s'), kd('d'), kd('f'), kd('g'), kd('h'), kd('j'), k_f, l_f};
-        KeyDef[] r1split = {kd('a'), kd('s'), kd('d'), kd('f'), kd('g'), kd('h'), kd('j'), kd('k'), kd('l'), ENTER};
+        KeyDef[] r1split = {kd('a'), kd('s'), kd('d'), kd('f'), kd('g'), kd('h'), kd('j'), k_f, l_f, ENTER};
         KeyDef[] r2 = {z_f, x, c, v, b, n_f, m_f, QUESTION_F, BKSP};
-        KeyDef[] r2split = {z, x, c, v, b, n, m, QUESTION, SEMI, SHIFT};
+        KeyDef[] r2split = {z, x, c, v, b, n, m, QUESTION_F, SEMI, SHIFT};
         KeyDef[] r3flat = {SHIFT, SPACE_FLAT, ENTER};
         KeyDef[] r3split = {WAVE, COMMA, SPACE_L, SPACE_R, DOT, APOSTROPHE};
         ROWS_FLAT = new Row[]{new Row(r0, 0, r0.length), new Row(r1, STAGGER_ROW1, r1.length),

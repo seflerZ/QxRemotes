@@ -140,7 +140,6 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyListener, OnGenericMotionListener, GameGestures {
     public static final int[] inputModeIds = {R.id.itemInputTouchpad, R.id.itemInputDirectTouch, R.id.itemInputGamepad};
@@ -586,7 +585,7 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
         extraKeysView.setExtraKeysViewClient(new ExtraKeysView.IExtraKeysView() {
             @Override
             public void onExtraKeyButtonClick(View view, ExtraKeyButton buttonInfo, MaterialButton button) {
-                performShortKeys(Arrays.stream(buttonInfo.getKey().split(",")).collect(Collectors.toList()));
+                performShortKeys(splitShortKey(buttonInfo.getKey()));
 //                sendShortVibration();
             }
 
@@ -706,6 +705,21 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
         } else {
             canvas.getKeyboard().onScreenSuperOff();
         }
+    }
+
+    /**
+     * Split an extra-key macro into its comma-separated keys.
+     *
+     * <p>A lone {@code ","} is itself a key value (a comma extra-key), but
+     * {@link String#split(String)} returns an empty array for it, which
+     * made {@link #performShortKeys} send nothing. Any other key string
+     * keeps the macro semantics ({@code "CTRL,c"} = Ctrl then c).
+     */
+    private static List<String> splitShortKey(String key) {
+        if (",".equals(key)) {
+            return Collections.singletonList(",");
+        }
+        return Arrays.asList(key.split(","));
     }
 
     private void performShortKeys(List<String> keys) {
