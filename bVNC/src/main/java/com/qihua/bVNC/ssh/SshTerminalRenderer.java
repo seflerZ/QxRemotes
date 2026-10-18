@@ -338,6 +338,12 @@ public class SshTerminalRenderer {
         }
     }
 
+    /** Last cursor Y (mbitmap px) seen while the cursor was visible.
+     *  tmux parks a hidden cursor on the bottom-right cell during
+     *  redraws; panning to that position shoves the real prompt off
+     *  screen. */
+    private volatile int lastVisibleCursorPy = -1;
+
     /**
      * Y pixel of the libvterm cursor's bottom in mbitmap coordinates.
      * Used by the SSH IME push-up path to substitute for the
@@ -353,9 +359,19 @@ public class SshTerminalRenderer {
         if (c == null) {
             return 0;
         }
+        if (!c.visible) {
+            // TUI apps draw their own cursor as a reverse-video space
+            // while keeping the hardware cursor hidden; follow that.
+            int drawn = canvasRenderer.getDrawnCursorRow();
+            if (drawn >= 0) {
+                return canvasRenderer.paddingPx + (drawn + 1) * canvasRenderer.charHeight;
+            }
+            return lastVisibleCursorPy >= 0 ? lastVisibleCursorPy : 0;
+        }
         // Cursor cell bottom in mbitmap px, padding included — row 0 must
         // report its real position or the IME pan pushes it off-screen.
-        return canvasRenderer.paddingPx + (c.row + 1) * canvasRenderer.charHeight;
+        lastVisibleCursorPy = canvasRenderer.paddingPx + (c.row + 1) * canvasRenderer.charHeight;
+        return lastVisibleCursorPy;
     }
 
     public void close() {

@@ -159,7 +159,6 @@ static int jni_movecursor(VTermPos pos, VTermPos oldpos, int visible, void *user
     h->cursor_row = pos.row;
     h->cursor_col = pos.col;
     h->cursor_visible = visible;
-    LOGI("movecursor: row=%d col=%d visible=%d", pos.row, pos.col, visible);
     return 1;
 }
 
@@ -175,6 +174,13 @@ static int jni_settermprop(VTermProp prop, VTermValue *val, void *user) {
     jhandle_t *h = (jhandle_t *) user;
     if (prop == VTERM_PROP_SYNCOUTPUT) {
         h->sync_output = val->boolean;
+        return 1;
+    }
+    if (prop == VTERM_PROP_CURSORVISIBLE) {
+        // DECSET/DECRST ?25 — hide/show without a cursor move. Without
+        // this the movecursor cache stays at its last value and the
+        // renderer paints a phantom block during full-screen redraws.
+        h->cursor_visible = val->boolean;
         return 1;
     }
     if (prop == VTERM_PROP_MOUSE) {

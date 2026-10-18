@@ -62,6 +62,16 @@ public final class VTermCanvasRenderer {
     private final Paint cursorPaint;
     private final Paint selectionPaint;
 
+    /** Bottom-most reverse-video space cell seen in the last frame.
+     *  TUIs (Claude Code, vim, …) hide the hardware cursor and draw
+     *  their own as a reverse-video space; the IME pan follows this
+     *  when libvterm's cursor is hidden. Live row, -1 = none. */
+    private volatile int drawnCursorRow = -1;
+
+    public int getDrawnCursorRow() {
+        return drawnCursorRow;
+    }
+
     /** Cell width in pixels, valid after construction. */
     public final float charWidth;
     /** Cell height in pixels, valid after construction. */
@@ -262,6 +272,7 @@ public final class VTermCanvasRenderer {
         int saveCount = canvas.save();
         canvas.clipRect(paddingPx, paddingPx,
                 canvas.getWidth() - paddingPx, canvas.getHeight() - paddingPx);
+        int dib = -1;
         for (int k = kStart; k < rows; k++) {
             int v = topV + k;
             float cellTop = paddingPx + k * charHeight + frac;
@@ -269,9 +280,14 @@ public final class VTermCanvasRenderer {
             float baselineY = cellBottom - textPaint.getFontMetrics().descent;
             for (int col = 0; col < cols; col++) {
                 SshTermStateMachine.TermCell cell = cellAt(sm, v, sbCount, rows, col);
+                if (cell != null && cell.codepoint == ' '
+                        && (cell.attrs & ATTR_REVERSE) != 0) {
+                    dib = v - sbCount;
+                }
                 paintCell(canvas, cell, col, cellTop, cellBottom, baselineY);
             }
         }
+        drawnCursorRow = (offset == 0 && dib >= 0) ? dib : -1;
         // Fill any gaps within the clip rect that the grid didn't cover.
         // The cell loop draws rows × cols cells, but the content area is
         // usually larger than the grid — the right margin (cols*charWidth <
@@ -311,7 +327,10 @@ public final class VTermCanvasRenderer {
         // remote program can paint (zsh completion menus, reverse video).
         if (offset == 0) {
             SshTermStateMachine.CursorInfo cur = sm.getCursor();
-            if (cur != null) {
+            // Honour DEC ?25l: full-screen repaints hide the cursor and
+            // move it around; painting it anyway makes it dance across
+            // the screen.
+            if (cur != null && cur.visible) {
                 int safeCol = Math.max(0, Math.min(cur.col, cols - 1));
                 int safeRow = Math.max(0, Math.min(cur.row, rows - 1));
                 int cursorColor = defaultFg;

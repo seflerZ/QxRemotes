@@ -396,6 +396,13 @@ static int on_text(const char bytes[], size_t len, void *user)
       }
 #endif
       width += this_width;
+      /* U+FE0F VARIATION SELECTOR-16 asks for emoji presentation.
+       * Terminals (and tmux) render the sequence double-width even
+       * when the base codepoint is text-presentation and therefore
+       * reports width 1 (e.g. U+1F6E0 🛠️). Without this the grid
+       * drifts one column per such emoji. */
+      if(codepoints[i] == 0xFE0F)
+        width = 2;
     }
 
     while(i < npoints && vterm_unicode_is_combining(codepoints[i]))
