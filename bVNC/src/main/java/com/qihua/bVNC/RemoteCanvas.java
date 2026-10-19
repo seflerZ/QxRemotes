@@ -176,6 +176,16 @@ public class RemoteCanvas extends SurfaceView implements Viewable
      */
     public int absoluteXPosition = 0, absoluteYPosition = 0;
 
+    /** Colour painted under the framebuffer. Panning up (soft keyboard
+     *  push-up) exposes this strip at the bottom; transparent keeps the
+     *  window's black behind it for RDP/VNC, SSH sets its terminal bg so
+     *  the exposed band doesn't read as a black frame. */
+    public volatile int surfaceBackgroundColor = 0x00000000;
+
+    public void setSurfaceBackgroundColor(int color) {
+        surfaceBackgroundColor = color;
+    }
+
     /*
      * How much to shift coordinates over when converting from full to view coordinates.
      */

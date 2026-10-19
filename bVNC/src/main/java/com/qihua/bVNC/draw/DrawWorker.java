@@ -1,7 +1,6 @@
 package com.qihua.bVNC.draw;
 
 import android.graphics.Canvas;
-import android.graphics.Color;
 import android.graphics.PorterDuff;
 import android.util.Log;
 import android.view.SurfaceHolder;
@@ -124,7 +123,7 @@ public class DrawWorker implements Runnable {
                 }
                 glCanvas.setMatrix(canvas.scaler.getMatrix());
                 glCanvas.translate(-canvas.absoluteXPosition, -canvas.absoluteYPosition);
-                glCanvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR);
+                glCanvas.drawColor(canvas.surfaceBackgroundColor, PorterDuff.Mode.SRC);
 
                 canvas.bitmapData.drawable.draw(glCanvas);
 

@@ -380,6 +380,10 @@ public class SshConnectionInitializer extends ConnectionInitializer {
 
     /** Re-apply AppCompat day/night palette + reseed mbitmap. Safe pre-start. */
     public void applyTheme() {
+        if (canvas != null && ctx != null) {
+            canvas.setSurfaceBackgroundColor(
+                    ctx.getResources().getColor(com.qihua.bVNC.R.color.ssh_terminal_bg, ctx.getTheme()));
+        }
         if (renderer == null) return;
         renderer.applyTheme();
         // Reseed so user sees the flip immediately, not on the next shell byte.

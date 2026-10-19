@@ -343,6 +343,38 @@ public class SshTerminalRenderer {
      *  redraws; panning to that position shoves the real prompt off
      *  screen. */
     private volatile int lastVisibleCursorPy = -1;
+    /** Last Y reported by a painted reverse-video cursor; kept across
+     *  frames where the renderer hasn't found one yet. */
+    private volatile int lastDrawnCursorPy = -1;
+    private volatile long lastDrawnAtMs = 0L;
+    /** Expire a stale drawn-cursor anchor so leaving a TUI falls back to
+     *  the hardware cursor within a couple of seconds. */
+    private static final long DRAWN_ANCHOR_TTL_MS = 2000L;
+    /** A visible cursor row must persist this long before it drives the
+     *  IME pan. libvterm emits a one-sample phantom "visible" cursor at a
+     *  stale row (often 0) during TUI redraws; trusting it made the pan
+     *  snap back to origin. */
+    private static final long VISIBLE_ROW_STABLE_MS = 150L;
+    private int visibleRowCandidate = -1;
+    private long visibleRowCandidateSince = 0L;
+    private int visibleRowTrusted = -1;
+
+    private boolean isStableVisibleRow(int row) {
+        long now = android.os.SystemClock.uptimeMillis();
+        if (row == visibleRowTrusted) {
+            return true;
+        }
+        if (row != visibleRowCandidate) {
+            visibleRowCandidate = row;
+            visibleRowCandidateSince = now;
+            return false;
+        }
+        if (now - visibleRowCandidateSince >= VISIBLE_ROW_STABLE_MS) {
+            visibleRowTrusted = row;
+            return true;
+        }
+        return false;
+    }
 
     /**
      * Y pixel of the libvterm cursor's bottom in mbitmap coordinates.
@@ -359,19 +391,42 @@ public class SshTerminalRenderer {
         if (c == null) {
             return 0;
         }
-        if (!c.visible) {
-            // TUI apps draw their own cursor as a reverse-video space
-            // while keeping the hardware cursor hidden; follow that.
-            int drawn = canvasRenderer.getDrawnCursorRow();
-            if (drawn >= 0) {
-                return canvasRenderer.paddingPx + (drawn + 1) * canvasRenderer.charHeight;
-            }
-            return lastVisibleCursorPy >= 0 ? lastVisibleCursorPy : 0;
+        int drawn = canvasRenderer.getDrawnCursorRow();
+        int drawnPy = drawn >= 0
+                ? canvasRenderer.paddingPx + (drawn + 1) * canvasRenderer.charHeight
+                : -1;
+        boolean visible = c.visible && isStableVisibleRow(c.row);
+        if (visible) {
+            // Cursor cell bottom in mbitmap px, padding included — row 0
+            // must report its real position or panning pushes it off.
+            lastVisibleCursorPy = canvasRenderer.paddingPx
+                    + (c.row + 1) * canvasRenderer.charHeight;
         }
-        // Cursor cell bottom in mbitmap px, padding included — row 0 must
-        // report its real position or the IME pan pushes it off-screen.
-        lastVisibleCursorPy = canvasRenderer.paddingPx + (c.row + 1) * canvasRenderer.charHeight;
-        return lastVisibleCursorPy;
+        // A self-drawn cursor (reverse-video cell) is the authoritative
+        // anchor for TUIs: the hardware cursor is parked or phantom during
+        // redraws, which made the IME pan jump by a few rows. Between
+        // paints the renderer reports -1, so remember the last drawn
+        // position — dropping back to the stale hardware cursor there made
+        // psmux oscillate between panned and unpanned.
+        if (drawnPy >= 0) {
+            lastDrawnCursorPy = drawnPy;
+            lastDrawnAtMs = android.os.SystemClock.uptimeMillis();
+            return drawnPy;
+        }
+        if (lastDrawnCursorPy >= 0
+                && android.os.SystemClock.uptimeMillis() - lastDrawnAtMs < DRAWN_ANCHOR_TTL_MS) {
+            return lastDrawnCursorPy;
+        }
+        if (!c.visible) {
+            // psmux keeps the hardware cursor hidden but still reports the
+            // real row. tmux/Claude Code park the hidden cursor on the
+            // last row during redraws, so only trust non-bottom rows.
+            if (c.row >= 0 && currentRows > 1 && c.row < currentRows - 1) {
+                return canvasRenderer.paddingPx + (c.row + 1) * canvasRenderer.charHeight;
+            }
+        }
+        // Phantom or hidden cursor falls back to the last trusted position.
+        return lastVisibleCursorPy >= 0 ? lastVisibleCursorPy : 0;
     }
 
     public void close() {
