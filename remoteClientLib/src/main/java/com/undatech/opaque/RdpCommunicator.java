@@ -387,15 +387,11 @@ public class RdpCommunicator extends RemoteConnectable implements RdpKeyboardMap
     }
 
     public void connect() {
-        // 整条 RDP 会话(含 MediaCodec 解码 + YUV->RGB + JNI 回调)都跑在本线程上
-        // (session.connect 是阻塞式会话循环)。实测本客户端每帧成本约 27ms,其中
-        // YUV->RGB 占 8.6ms(纯 CPU 计算),提到显示级优先级以便被调度到性能核。
-        try {
-            android.os.Process.setThreadPriority(
-                    android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY);
-        } catch (Throwable t) {
-            // 提优先级失败不影响功能
-        }
+        // 不在这里提线程优先级:connect() 跑在 UI 线程上(handler.post -> startConnection),
+        // 而 freerdp_connect() 会自己 spawn 一个 native 会话线程就返回,真正的解码/音频
+        // 都不在这个线程上。之前的 setThreadPriority(URGENT_DISPLAY) 实际把主线程永久
+        // 提到了 -12,抢了音频线程的 CPU(主线程卡 + 音频断)。会话线程的优先级在
+        // FreeRDP 侧(android_freerdp.c 的 android_thread_func)设置。
 
         // Pre-validate hostname before connecting to avoid crashes in FreeRDP
         // when DNS resolution fails (SIGBUS crash in freerdp_set_last_error_ex)
@@ -582,16 +578,14 @@ public class RdpCommunicator extends RemoteConnectable implements RdpKeyboardMap
             return;
         }
 
-        Bitmap bitmap = viewable.getBitmap();
+        // 写 back buffer(不是正在显示的那块),画完再发布。
+        Bitmap bitmap = viewable.getWriteBitmap();
         if (bitmap == null) {
             return;
         }
 
-        // [CrashFix] 与 UltraCompactBitmapData.copyRect 同步对齐:lockPixels/写/unlockPixels
-        // 期间防止 DrawWorker 线程并发访问同一 Bitmap 像素内存(hwuiTask1 渲染撞上时
-        // 会触发 libc FORTIFY 检测 destroyed mutex → SIGABRT)。
-        // synchronized 只防 Java 层并发;native lockPixels 与 hwui GPU 渲染仍有部分窗口,
-        // 但显著缩小了三线程撞上的概率。
+        // 锁这块 bitmap:绘制线程画同一块时也持锁,两边不会同时碰同一块像素
+        // (以前是绘制线程优先级更高,解码线程被压住 → 帧延迟/撕裂)。
         synchronized (bitmap) {
             DrawTask drawTask = new DrawTask(x, y, width, height, true);
 
@@ -601,6 +595,7 @@ public class RdpCommunicator extends RemoteConnectable implements RdpKeyboardMap
                     , bitmap.getWidth()
                     , bitmap.getHeight());
 
+            viewable.publishFrame();
             viewable.reDraw(drawTask);
         }
     }

@@ -102,7 +102,9 @@ public class NvStreamConnectionInitializer extends ConnectionInitializer {
         prefConfig.enableSops = true;
         prefConfig.bindAllUsb = true;
         prefConfig.audioConfiguration = MoonBridge.AUDIO_CONFIGURATION_STEREO;
-        prefConfig.framePacing = PreferenceConfiguration.FRAME_PACING_MIN_LATENCY;
+        // 用 Choreographer 按 vsync 匀速出帧。原来的 MIN_LATENCY 是"解出来就放",
+        // 解码抖动 1:1 变成画面抖动(微卡帧)。代价是多一帧延迟。
+        prefConfig.framePacing = PreferenceConfiguration.FRAME_PACING_BALANCED;
         prefConfig.multiController = false;
         prefConfig.disableWarnings = true;
         prefConfig.enablePip = false;

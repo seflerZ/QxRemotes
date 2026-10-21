@@ -48,7 +48,22 @@ public class DoubleBufferBitmapData extends AbstractBitmapData {
     /** Paint onto back buffer then atomically publish as front. */
     public void paintAndPublish(Painter painter) {
         if (backCanvas == null) backCanvas = new Canvas(back);
-        painter.draw(backCanvas);
+        synchronized (back) {
+            painter.draw(backCanvas);
+        }
+        publishFrame();
+    }
+
+    /**
+     * The buffer a renderer should draw into. It is never the buffer that is
+     * being displayed, so writing into it cannot tear the visible frame.
+     */
+    public Bitmap getBackBitmap() {
+        return back;
+    }
+
+    /** Publish the back buffer as the new front buffer. */
+    public void publishFrame() {
         Bitmap newFront = back;
         Bitmap oldFront = front.getAndSet(newFront);
         back = oldFront != null && oldFront != newFront
@@ -126,8 +141,17 @@ public class DoubleBufferBitmapData extends AbstractBitmapData {
 
         @Override
         public void draw(Canvas canvas) {
-            canvas.drawBitmap(((DoubleBufferBitmapData) data).getFront(),
-                    0, 0, _defaultPaint);
+            DoubleBufferBitmapData d = (DoubleBufferBitmapData) data;
+            Bitmap f = d.getFront();
+            // The lock is per bitmap: a writer that reuses this buffer as its
+            // back buffer waits here instead of writing pixels the GPU is
+            // still uploading.
+            synchronized (f) {
+                canvas.drawBitmap(f, 0, 0, _defaultPaint);
+                if (d.drawCursor) {
+                    canvas.drawBitmap(softCursor, cursorRect.left, cursorRect.top, _defaultPaint);
+                }
+            }
         }
     }
 }

@@ -13,6 +13,19 @@ public interface Viewable {
 
     Bitmap getBitmap();
 
+    /**
+     * The bitmap a native renderer should write the next frame into. For
+     * protocols that use double buffering this is the back buffer, so the
+     * visible frame is never touched while it is being drawn.
+     */
+    Bitmap getWriteBitmap();
+
+    /**
+     * Publish a frame that was written into {@link #getWriteBitmap()}. No-op
+     * for protocols that draw straight into the visible bitmap.
+     */
+    void publishFrame();
+
     void reDraw(int x, int y, int width, int height);
 
     void reDraw(DrawTask task);

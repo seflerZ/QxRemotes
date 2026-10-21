@@ -10,31 +10,36 @@ import com.qihua.bVNC.RemoteCanvas;
 import com.qihua.bVNC.Utils;
 import com.undatech.opaque.DrawTask;
 
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Pulls DrawTasks off a queue and paints them onto the canvas's
  * SurfaceHolder on a dedicated thread.
  *
- * Throttling rules (preserved from the old inner-class):
- *   - addTask coalesces if the previous task is < 10 ms old
+ * Throttling rules:
+ *   - only the newest pending frame is kept (older ones are dropped)
  *   - run skips drawing if the previous draw was < 13 ms ago
  *   - frames older than 16 ms count as drops (when isCount() is true)
  *
+ * The old implementation used an unbounded queue and coalesced against the
+ * *head* of the queue, so frames piled up and were drawn in clumps - that is
+ * what the "micro stutter" was. Keeping only the newest frame makes the
+ * pipeline self-throttling: if we fall behind, the stale frames are simply
+ * replaced by the next one that arrives.
+ *
  * Lifecycle: constructor starts the thread; call stop() to terminate
- * cleanly. The old inner-class never had a stop(), so the thread leaked
- * for the lifetime of the process.
+ * cleanly.
  */
 public class DrawWorker implements Runnable {
     private static final String TAG = "DrawWorker";
 
-    /** Sentinel queued by stop() to wake the blocking take() and exit. */
-    private static final DrawTask POISON = new DrawTask(0, 0, 0, 0);
-
     private final RemoteCanvas canvas;
     private final Thread thread;
-    private final LinkedBlockingQueue<DrawTask> queue = new LinkedBlockingQueue<>();
+    /** The newest frame waiting to be drawn. */
+    private final AtomicReference<DrawTask> pending = new AtomicReference<>();
+    /** Wakes up the draw thread when a new frame shows up. */
+    private final Semaphore signal = new Semaphore(0);
     private final boolean showFps;
 
     private volatile boolean running = true;
@@ -55,19 +60,16 @@ public class DrawWorker implements Runnable {
         }
     }
 
+    /** Keep only the newest frame - anything older is already stale. */
     public void addTask(DrawTask task) {
-        DrawTask lastTask = queue.peek();
-        if (lastTask != null
-                && System.currentTimeMillis() - lastTask.getInTimeMs() < 10) {
-            return;
-        }
-        queue.add(task);
+        pending.set(task);
+        signal.release();
     }
 
     /** Stop the worker thread. Idempotent. */
     public void stop() {
         running = false;
-        queue.offer(POISON);
+        signal.release();
         try {
             thread.join(500);
         } catch (InterruptedException e) {
@@ -85,16 +87,22 @@ public class DrawWorker implements Runnable {
 
     @Override
     public void run() {
-        // use the highest priority to draw the frame to avoid micro stutter
-        android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO);
+        // Display priority, not URGENT_AUDIO: this thread used to run at -16 and
+        // outranked the audio decode threads (native pthreads at nice 0), so a
+        // full-frame blit could starve audio and cause audible dropouts.
+        android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_DISPLAY);
 
         while (running) {
             Canvas glCanvas = null;
             SurfaceHolder holder = canvas.surfaceHolder;
             try {
-                DrawTask task = queue.take();
-                if (task == POISON || !running) {
-                    break;
+                signal.acquire();
+                // Merge the wakeups of several frames into one draw
+                signal.drainPermits();
+
+                DrawTask task = pending.getAndSet(null);
+                if (task == null || !running) {
+                    continue;
                 }
 
                 if (isShowFps() && task.isCount()) {

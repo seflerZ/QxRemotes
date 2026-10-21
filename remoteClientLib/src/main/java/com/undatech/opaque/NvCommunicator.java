@@ -196,7 +196,10 @@ public class NvCommunicator extends RemoteConnectable implements NvConnectionLis
             });
 
             Context context = activity.getApplicationContext();
-            conn.start(new AndroidAudioRenderer(context, true),
+            // 之前硬编码 true,导致 AudioTrack 走不了 low-latency 路径
+            // (见 AndroidAudioRenderer.setup),只能用 10ms 的标准路径缓冲,容易爆音。
+            // prefConfig.enableAudioFx 本来就是 false。
+            conn.start(new AndroidAudioRenderer(context, prefConfig.enableAudioFx),
                     decoderRenderer, NvCommunicator.this);
         }
     }

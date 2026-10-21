@@ -860,6 +860,14 @@ public class RemoteCanvas extends SurfaceView implements Viewable
             int h = Math.max(1, rfbconn.framebufferHeight());
             bitmapData = new DoubleBufferBitmapData(rfbconn, this, w, h, Bitmap.Config.ARGB_8888);
             Log.i(TAG, "Using DoubleBufferBitmapData (SSH).");
+        } else if (protocol == ProtocolType.RDP) {
+            // RDP 的整帧是 native 侧写进来的,写的时候不能和绘制线程抢同一块
+            // 像素内存(以前靠 synchronized(bitmap) 顶着,绘制线程优先级更高,
+            // 反而把解码线程压住了 → 帧延迟和撕裂)。改成双缓冲:写 back,画 front。
+            int w = Math.max(1, rfbconn.framebufferWidth());
+            int h = Math.max(1, rfbconn.framebufferHeight());
+            bitmapData = new DoubleBufferBitmapData(rfbconn, this, w, h, Bitmap.Config.ARGB_8888);
+            Log.i(TAG, "Using DoubleBufferBitmapData (RDP).");
         } else if (isPushlessProtocol) {
             bitmapData = new UltraCompactBitmapData(rfbconn, this, isUltraCompactProtocol);
             Log.i(TAG, "Using UltraCompactBufferBitmapData.");
@@ -1353,6 +1361,24 @@ public class RemoteCanvas extends SurfaceView implements Viewable
         }
 
         return bitmapData.mbitmap;
+    }
+
+    @Override
+    public Bitmap getWriteBitmap() {
+        if (bitmapData == null) {
+            return null;
+        }
+        if (bitmapData instanceof DoubleBufferBitmapData) {
+            return ((DoubleBufferBitmapData) bitmapData).getBackBitmap();
+        }
+        return bitmapData.mbitmap;
+    }
+
+    @Override
+    public void publishFrame() {
+        if (bitmapData instanceof DoubleBufferBitmapData) {
+            ((DoubleBufferBitmapData) bitmapData).publishFrame();
+        }
     }
 
     public void setActivity(RemoteCanvasActivity activity) {
