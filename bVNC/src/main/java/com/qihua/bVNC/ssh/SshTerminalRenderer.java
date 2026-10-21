@@ -38,8 +38,22 @@ public class SshTerminalRenderer {
     /** Inset on all four sides of the grid, in dp. */
     private static final float PADDING_DP = 8f;
 
+    /** Sink used while there is no SSH transport. */
+    private static final java.io.OutputStream DISCARD = new java.io.OutputStream() {
+        @Override
+        public void write(int b) {
+        }
+
+        @Override
+        public void write(byte[] b, int off, int len) {
+        }
+    };
+
     private final float density;
-    private final SshShellChannel channel;
+    /** Current transport. Swapped on reconnect (see {@link #rebind}). */
+    private SshShellChannel channel;
+    /** Paint callback handed to {@link #open}. */
+    private Runnable updateCallback;
     /** Terminal font (Sarasa Mono SC Nerd + Nerd PUA-A + CJK). */
     private final Typeface terminalTypeface;
     /** Activity context — used to resolve the theme-driven palette
@@ -187,11 +201,26 @@ public class SshTerminalRenderer {
         stateMachine.setCellHeight(canvasRenderer.charHeight);
         // Wire libvterm's generated input bytes back to the SSH channel's stdin.
         stateMachine.setOutputStream(channel.getTerminalOut());
+        this.updateCallback = onUpdate;
+        startReader(channel, onUpdate);
+        channel.start();
+        Log.i(TAG, "open: " + cols + " cols x " + rows + " rows, charW="
+                + canvasRenderer.charWidth + " charH=" + canvasRenderer.charHeight
+                + " pad=" + pad + "px");
+    }
+
+    /**
+     * (Re)start the reader thread that drains a channel into the state
+     * machine. Split out of {@link #open} so a reconnect can attach the
+     * renderer to a fresh channel.
+     */
+    private void startReader(SshShellChannel ch, Runnable onUpdate) {
+        stopReader();
         // Reader thread: drains SSH bytes from channel.getTerminalIn()
         // into the libvterm state machine. Runs until close().
         // (SshShellChannel.getTerminalIn() returns an InputStream
         //  from which the shell's output is read.)
-        final java.io.InputStream sshOut = channel.getTerminalIn();
+        final java.io.InputStream sshOut = ch.getTerminalIn();
         readerThread = new Thread(() -> {
             try {
                 long totalRead = 0;
@@ -217,10 +246,40 @@ public class SshTerminalRenderer {
         }, "SSH-VTerm-Reader");
         readerThread.setDaemon(true);
         readerThread.start();
-        channel.start();
-        Log.i(TAG, "open: " + cols + " cols x " + rows + " rows, charW="
-                + canvasRenderer.charWidth + " charH=" + canvasRenderer.charHeight
-                + " pad=" + pad + "px");
+    }
+
+    private void stopReader() {
+        Thread t = readerThread;
+        readerThread = null;
+        if (t != null) {
+            t.interrupt();
+        }
+    }
+
+    /**
+     * Attach the renderer to a fresh channel after a reconnect. The
+     * terminal grid (libvterm state) is kept — only the transport is
+     * replaced, so the user still sees the scrollback.
+     */
+    public void rebind(SshShellChannel newChannel) {
+        Log.i(TAG, "rebind: switching to a new SSH channel");
+        this.channel = newChannel;
+        if (stateMachine != null) {
+            stateMachine.setOutputStream(newChannel.getTerminalOut());
+        }
+        bytesRead = 0;
+        lastOutputAtMs = 0;
+        startReader(newChannel, updateCallback);
+    }
+
+    /**
+     * Swallow keyboard output while there is no transport (the pipe is
+     * closed then, and writing into it would throw inside libvterm).
+     */
+    public void suspendOutput() {
+        if (stateMachine != null) {
+            stateMachine.setOutputStream(DISCARD);
+        }
     }
 
     public void renderInto(DoubleBufferBitmapData target) {

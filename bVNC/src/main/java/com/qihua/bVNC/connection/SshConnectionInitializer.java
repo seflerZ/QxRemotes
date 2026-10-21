@@ -9,10 +9,12 @@ import android.os.Looper;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.Display;
+import android.widget.Toast;
 
 import com.qihua.bVNC.App;
 import com.qihua.bVNC.Constants;
 import com.qihua.bVNC.DoubleBufferBitmapData;
+import com.qihua.bVNC.R;
 import com.qihua.bVNC.RemoteCanvas;
 import com.qihua.bVNC.ssh.SshTerminalConnection;
 import com.qihua.bVNC.communicator.SshCommunicator;
@@ -93,6 +95,11 @@ public class SshConnectionInitializer extends ConnectionInitializer {
     private static final long STARTUP_CMD_POLL_MS = 100L;
     /** Give up waiting for the shell after this long and type anyway. */
     private static final long STARTUP_CMD_TIMEOUT_MS = 8000L;
+
+    /** How many times we try to rebuild the SSH session before giving up. */
+    private static final int RECONNECT_MAX_ATTEMPTS = 8;
+    /** Delay before each reconnect attempt (ms). The first attempt is immediate. */
+    private static final long[] RECONNECT_BACKOFF_MS = {0, 1000, 2000, 4000, 8000, 15000, 15000, 15000};
     private volatile long lastPaintAt = 0;
     /** Minimum gap between paints (~60 FPS). Without it a TUI's end-of-frame
      *  static re-dump paints once per 4K read chunk and visibly scrolls. */
@@ -135,6 +142,12 @@ public class SshConnectionInitializer extends ConnectionInitializer {
     private volatile boolean connectStarted;
     /** Set to true when doConnect() finishes successfully. */
     private volatile boolean shellReady;
+    /** The user closed the session — do not reconnect. */
+    private volatile boolean userDisconnected = false;
+    /** A reconnect is in progress (guards duplicate attempts). */
+    private volatile boolean reconnecting = false;
+    /** Number of reconnect attempts done since the link died. */
+    private int reconnectAttempt = 0;
     /** Guards teardown / rebuild against the in-flight connect thread. */
     private final ReentrantLock lifecycleLock = new ReentrantLock();
 
@@ -207,13 +220,11 @@ public class SshConnectionInitializer extends ConnectionInitializer {
         channel = new SshShellChannel();
         // When the remote shell exits (exit / Ctrl+D, SSH session ends),
         // navigate back to the main connection list instead of leaving
-        // the user staring at a dead canvas.
-        channel.setOnDisconnect(() -> {
-            teardown(canvas);
-            if (canvas != null && canvas.handler != null && canvas.activity != null) {
-                canvas.handler.post(canvas.activity::disconnectAndClose);
-            }
-        });
+        // the user staring at a dead canvas. A *transport* loss (network)
+        // is different — that one reconnects (see onTransportLost).
+        wireChannel(channel);
+        // trilead's connection monitor + the keepalive ping both land here.
+        sshTerminal.setOnTransportLost(this::onTransportLost);
         renderer = new SshTerminalRenderer(density, channel, ctx);
         // Forward grid-size changes to remote PTY (resizePTY is no-op pre-shell).
         renderer.setGridSizeListener((cols, rows) -> {
@@ -275,40 +286,7 @@ public class SshConnectionInitializer extends ConnectionInitializer {
     /** Background worker — drives the trilead handshake off the UI thread. */
     private void doConnect() {
         try {
-            Log.i(TAG, "doConnect: connecting " + sshUser + "@" + sshHost + ":" + sshPort
-                    + " useSshPubKey=" + useSshPubKey + " hasPrivKey=" + !sshPrivKey.isEmpty());
-            boolean authOk;
-            // Pubkey first when present — passphrase-less key skips password round-trip.
-            boolean canPubkey = useSshPubKey && !sshPrivKey.isEmpty();
-            if (canPubkey) {
-                try {
-                    authOk = sshTerminal.connectWithPubkey(sshUser, sshPrivKey, sshPubKey, sshPassPhrase);
-                } catch (Exception pubkeyErr) {
-                    // Surface the pubkey error so user can fix passphrase in ConfigSSH.
-                    Log.w(TAG, "doConnect: pubkey auth failed (" + pubkeyErr.getMessage()
-                            + "), falling back to password");
-                    authOk = sshTerminal.connect(sshUser, sshPassword);
-                }
-            } else {
-                authOk = sshTerminal.connect(sshUser, sshPassword);
-            }
-            if (!authOk) {
-                throw new Exception("SSH authentication failed for " + sshUser + "@" + sshHost
-                        + (canPubkey ? " (pubkey + password both rejected)" : " (password rejected)"));
-            }
-            Log.i(TAG, "doConnect: auth OK, opening shell with xterm-256color PTY");
-            // Open PTY at renderer's real cols/rows — 80x24 leaves TUIs stuck in the upper-left quadrant.
-            int cols = 80, rows = 24;
-            if (renderer != null) {
-                int rc = renderer.getCurrentCols();
-                int rr = renderer.getCurrentRows();
-                if (rc > 0) cols = rc;
-                if (rr > 0) rows = rr;
-            }
-            Log.i(TAG, "doConnect: opening PTY at " + cols + "x" + rows);
-            Session sshSession = sshTerminal.openShell(cols, rows);
-            // Pumps forward bytes; UpdateCallback paints.
-            channel.attach(sshSession);
+            connectTransport(channel);
             shellReady = true;
             Log.i(TAG, "doConnect: shell channel attached, terminal should start showing output");
             sendStartupCommand();
@@ -325,6 +303,47 @@ public class SshConnectionInitializer extends ConnectionInitializer {
                 }
             }
         }
+    }
+
+    /**
+     * Authenticate and open a shell on {@code ch}. Blocking — call from a
+     * background thread. Shared by the initial connect and by reconnects.
+     */
+    private void connectTransport(SshShellChannel ch) throws Exception {
+        Log.i(TAG, "connectTransport: connecting " + sshUser + "@" + sshHost + ":" + sshPort
+                + " useSshPubKey=" + useSshPubKey + " hasPrivKey=" + !sshPrivKey.isEmpty());
+        boolean authOk;
+        // Pubkey first when present — passphrase-less key skips password round-trip.
+        boolean canPubkey = useSshPubKey && !sshPrivKey.isEmpty();
+        if (canPubkey) {
+            try {
+                authOk = sshTerminal.connectWithPubkey(sshUser, sshPrivKey, sshPubKey, sshPassPhrase);
+            } catch (Exception pubkeyErr) {
+                // Surface the pubkey error so user can fix passphrase in ConfigSSH.
+                Log.w(TAG, "connectTransport: pubkey auth failed (" + pubkeyErr.getMessage()
+                        + "), falling back to password");
+                authOk = sshTerminal.connect(sshUser, sshPassword);
+            }
+        } else {
+            authOk = sshTerminal.connect(sshUser, sshPassword);
+        }
+        if (!authOk) {
+            throw new Exception("SSH authentication failed for " + sshUser + "@" + sshHost
+                    + (canPubkey ? " (pubkey + password both rejected)" : " (password rejected)"));
+        }
+        Log.i(TAG, "connectTransport: auth OK, opening shell with xterm-256color PTY");
+        // Open PTY at renderer's real cols/rows — 80x24 leaves TUIs stuck in the upper-left quadrant.
+        int cols = 80, rows = 24;
+        if (renderer != null) {
+            int rc = renderer.getCurrentCols();
+            int rr = renderer.getCurrentRows();
+            if (rc > 0) cols = rc;
+            if (rr > 0) rows = rr;
+        }
+        Log.i(TAG, "connectTransport: opening PTY at " + cols + "x" + rows);
+        Session sshSession = sshTerminal.openShell(cols, rows);
+        // Pumps forward bytes; UpdateCallback paints.
+        ch.attach(sshSession);
     }
 
     /** Type startup command into shell. CR not LF (matches Enter key).
@@ -365,6 +384,144 @@ public class SshConnectionInitializer extends ConnectionInitializer {
         });
     }
 
+    /** Wire the exit/lost callbacks of a channel. */
+    private void wireChannel(SshShellChannel ch) {
+        // The remote shell exited on its own (user typed exit / Ctrl+D).
+        ch.setOnDisconnect(() -> {
+            Log.i(TAG, "shell exited normally, closing the session");
+            teardown(canvas);
+            if (canvas != null && canvas.handler != null && canvas.activity != null) {
+                canvas.handler.post(canvas.activity::disconnectAndClose);
+            }
+        });
+        // The transport died (network loss) — reconnect instead of exiting.
+        ch.setOnTransportLost(this::onTransportLost);
+    }
+
+    /**
+     * The SSH transport died (network loss, NAT timeout, server reboot).
+     * Rebuild the session instead of dropping the user back to the
+     * connection list.
+     */
+    private void onTransportLost() {
+        if (userDisconnected || reconnecting) {
+            return;
+        }
+        Log.w(TAG, "onTransportLost: SSH transport lost, reconnecting");
+        reconnecting = true;
+        reconnectAttempt = 0;
+        if (canvas != null && canvas.handler != null) {
+            canvas.handler.post(() -> {
+                toast(R.string.ssh_reconnect_lost);
+                scheduleReconnect();
+            });
+        }
+    }
+
+    /** Schedule the next reconnect attempt. Main thread. */
+    private void scheduleReconnect() {
+        if (userDisconnected) {
+            return;
+        }
+        if (reconnectAttempt >= RECONNECT_MAX_ATTEMPTS) {
+            Log.w(TAG, "scheduleReconnect: giving up after " + reconnectAttempt + " attempts");
+            reconnecting = false;
+            toast(R.string.ssh_reconnect_failed);
+            teardown(canvas);
+            if (canvas != null && canvas.handler != null && canvas.activity != null) {
+                canvas.handler.post(canvas.activity::disconnectAndClose);
+            }
+            return;
+        }
+        long delay = RECONNECT_BACKOFF_MS[Math.min(reconnectAttempt, RECONNECT_BACKOFF_MS.length - 1)];
+        reconnectAttempt++;
+        Log.i(TAG, "scheduleReconnect: attempt " + reconnectAttempt + " in " + delay + "ms");
+        if (canvas != null && canvas.handler != null) {
+            canvas.handler.postDelayed(this::attemptReconnect, delay);
+        }
+    }
+
+    /** One reconnect attempt — the network part runs on a background thread. */
+    private void attemptReconnect() {
+        if (userDisconnected) {
+            return;
+        }
+        Thread t = new Thread(() -> {
+            SshShellChannel newChannel = null;
+            try {
+                // Drop the dead transport, keep the terminal (and its scrollback).
+                closeTransport();
+                newChannel = new SshShellChannel();
+                wireChannel(newChannel);
+                connectTransport(newChannel);
+            } catch (Throwable e) {
+                Log.w(TAG, "attemptReconnect: failed: " + e);
+                try {
+                    if (newChannel != null) {
+                        newChannel.close();
+                    }
+                } catch (Throwable ignored) {
+                }
+                if (canvas != null && canvas.handler != null) {
+                    canvas.handler.post(this::scheduleReconnect);
+                }
+                return;
+            }
+            channel = newChannel;
+            shellReady = true;
+            reconnectAttempt = 0;
+            final SshShellChannel ch = newChannel;
+            if (canvas != null && canvas.handler != null) {
+                canvas.handler.post(() -> {
+                    reconnecting = false;
+                    if (renderer != null) {
+                        renderer.rebind(ch);
+                    }
+                    toast(R.string.ssh_reconnect_ok);
+                    // The remote shell is a new one — the startup command has to run again.
+                    sendStartupCommand();
+                    postPaint();
+                });
+            }
+        }, "SSH-Reconnect");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    /**
+     * Close the SSH transport (channel + session) but keep the terminal
+     * grid and the canvas alive.
+     */
+    private void closeTransport() {
+        if (renderer != null) {
+            // Typing into a closed pipe would throw inside libvterm.
+            renderer.suspendOutput();
+        }
+        try {
+            if (channel != null) {
+                channel.close();
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "closeTransport: channel.close failed", t);
+        }
+        try {
+            if (sshTerminal != null) {
+                sshTerminal.close();
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "closeTransport: sshTerminal.close failed", t);
+        }
+    }
+
+    private void toast(int resId) {
+        try {
+            if (canvas != null && canvas.getContext() != null) {
+                Toast.makeText(canvas.getContext(), resId, Toast.LENGTH_SHORT).show();
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
     private void postPaint() {
         if (canvas == null || Looper.myLooper() != Looper.getMainLooper()) {
             // Already on main? Just paint. Otherwise hop.
@@ -381,6 +538,8 @@ public class SshConnectionInitializer extends ConnectionInitializer {
         lifecycleLock.lock();
         try {
             Log.i(TAG, "teardown: closing SSH");
+            // Whatever brought us here, the session is over — no reconnects.
+            userDisconnected = true;
             stopHeartbeat();
             stopPaintThread();
             if (connectThread != null && connectThread.isAlive()) {
@@ -408,6 +567,11 @@ public class SshConnectionInitializer extends ConnectionInitializer {
     /** Cursor Y in mbitmap pixels — feeds the IME push-up pan formula. */
     public int getCursorPixelY() {
         return renderer != null ? renderer.getCursorPixelY() : 0;
+    }
+
+    /** Cell height in pixels — the SSH pan leaves half a cell of slack. */
+    public int getCellHeight() {
+        return renderer != null ? renderer.getCellHeight() : 1;
     }
 
     /** Re-apply AppCompat day/night palette + reseed mbitmap. Safe pre-start. */

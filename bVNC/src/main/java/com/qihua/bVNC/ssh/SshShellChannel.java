@@ -61,6 +61,12 @@ public class SshShellChannel {
     /** 8KB so a paste of a screenful doesn't block the writer. */
     private static final int PIPE_SIZE = 8 * 1024;
 
+    /** Consecutive read errors before we call the transport dead. */
+    private static final int MAX_READ_ERRORS = 3;
+
+    /** Set once we reported the transport as lost (avoid duplicate reports). */
+    private volatile boolean transportLostReported = false;
+
     // Pipe pair #1: shell stdout → TermSession input.
     // readPump writes terminalInSink; TermSession reads from terminalIn.
     private final PipedInputStream terminalIn;
@@ -78,6 +84,8 @@ public class SshShellChannel {
 
     /** Called on readPump EOF — the remote shell exited (exit / Ctrl+D). */
     private Runnable onDisconnect;
+    /** Called when the transport died (EOF without an exit status). */
+    private Runnable onTransportLost;
 
     public SshShellChannel() throws IOException {
         terminalIn = new PipedInputStream(PIPE_SIZE);
@@ -103,6 +111,28 @@ public class SshShellChannel {
     /** Called when the remote shell exits (readPump gets EOF). */
     public void setOnDisconnect(Runnable r) {
         this.onDisconnect = r;
+    }
+
+    /**
+     * Called when the SSH transport died instead of the shell exiting
+     * normally — the server never sent an exit status. This is the
+     * network-loss case, which deserves a reconnect rather than an exit.
+     */
+    public void setOnTransportLost(Runnable r) {
+        this.onTransportLost = r;
+    }
+
+    /** True when the server sent an exit status (shell exited on its own). */
+    private boolean shellExitedNormally() {
+        com.trilead.ssh2.Session s = session;
+        if (s == null) {
+            return false;
+        }
+        try {
+            return s.getExitStatus() != null;
+        } catch (Throwable t) {
+            return false;
+        }
     }
 
     /**
@@ -155,27 +185,39 @@ public class SshShellChannel {
             return;
         }
         byte[] buf = new byte[1024];
+        int ioErrors = 0;
         while (running) {
             int n;
             try {
                 n = src.read(buf);
             } catch (IOException e) {
                 if (running) {
-                    Log.w(TAG, "readPump: read error (transient?): " + e.getMessage());
+                    Log.w(TAG, "readPump: read error: " + e.getMessage());
                 }
-                // Network blip or session closed. DON'T close terminalInSink
-                // here — let TermSession keep blocking so the user can
-                // reconnect or close the session explicitly. close() in
-                // teardown is the one place that closes the pipe.
+                // A dead transport keeps throwing. Give it a couple of tries
+                // (some errors are transient), then treat it as a lost
+                // connection so the initializer can reconnect.
+                if (++ioErrors >= MAX_READ_ERRORS) {
+                    Log.w(TAG, "readPump: giving up after " + ioErrors + " read errors");
+                    notifyTransportLost();
+                    return;
+                }
                 try { Thread.sleep(100); } catch (InterruptedException ie) {
                     return;
                 }
                 continue;
             }
+            ioErrors = 0;
             if (n < 0) {
                 Log.i(TAG, "readPump: stdout returned -1 (remote end closed)");
-                if (onDisconnect != null) {
-                    onDisconnect.run();
+                if (shellExitedNormally()) {
+                    Log.i(TAG, "readPump: shell exited normally (exit status received)");
+                    if (onDisconnect != null) {
+                        onDisconnect.run();
+                    }
+                } else {
+                    Log.w(TAG, "readPump: EOF without exit status — transport lost");
+                    notifyTransportLost();
                 }
                 break;
             }
@@ -186,6 +228,18 @@ public class SshShellChannel {
                 if (running) Log.w(TAG, "readPump: pipe write failed (likely teardown)", e);
                 return;
             }
+        }
+    }
+
+    /** Report the transport as lost — at most once per channel. */
+    private void notifyTransportLost() {
+        if (transportLostReported) {
+            return;
+        }
+        transportLostReported = true;
+        Runnable r = onTransportLost;
+        if (r != null) {
+            r.run();
         }
     }
 

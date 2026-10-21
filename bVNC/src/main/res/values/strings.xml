@@ -944,6 +944,9 @@ Below that is where you configure your connection.
     <string name="pref_keyboard_type_label_VISIBLE_PASSWORD">Text/Numbers No Suggestions (VISIBLE_PASSWORD)</string>
     <string name="pref_keyboard_type_label_TYPE_CLASS_TEXT">Text With Suggestions (TYPE_CLASS_TEXT)</string>
     <string name="warn_disconnect_will_reconnect">Connection lost due to network error or logged in from another computer, will reconnect now.</string>
+    <string name="ssh_reconnect_lost">SSH connection lost, reconnecting…</string>
+    <string name="ssh_reconnect_ok">SSH reconnected.</string>
+    <string name="ssh_reconnect_failed">SSH reconnect failed, closing the session.</string>
     <string name="show_privacy_policy">Show privacy policy</string>
     <string name="request_recording_parameter_title">Will request recoding permission</string>
     <string name="request_recording_parameter_description">"This permission is used to redirect local microphone to remote devices, especially useful in net meetings. "</string>

@@ -48,6 +48,12 @@ public final class SshTerminalConnection {
     private String host;
     private int port;
 
+    /** Notified when the SSH transport dies (network loss). */
+    private volatile Runnable onTransportLost;
+    /** Keepalive thread — pings the session so a dead link is noticed. */
+    private Thread keepaliveThread;
+    private static final long KEEPALIVE_INTERVAL_MS = 20000L;
+
     /**
      * @param host             server hostname or IP
      * @param port             SSH port (typically 22)
@@ -133,6 +139,16 @@ public final class SshTerminalConnection {
             return;
         }
         conn = new Connection(host, port);
+        // Transport death (WiFi drop, NAT timeout, ...) — trilead calls this
+        // when the connection can no longer be used. The initializer turns it
+        // into a reconnect instead of dropping the user back to the list.
+        conn.addConnectionMonitor((cause) -> {
+            Log.w(TAG, "connectionLost: " + cause);
+            Runnable r = onTransportLost;
+            if (r != null) {
+                r.run();
+            }
+        });
         final ServerHostKeyVerifier trustingVerifier = new ServerHostKeyVerifier() {
             @Override
             public boolean verifyServerHostKey(String hostname, int port, String serverHostKeyAlgorithm,
@@ -178,7 +194,55 @@ public final class SshTerminalConnection {
         }
         s.startShell();
         this.session = s;
+        startKeepalive();
         return s;
+    }
+
+    /** Notified when the SSH transport dies. */
+    public void setOnTransportLost(Runnable r) {
+        this.onTransportLost = r;
+    }
+
+    /**
+     * Ping the session every 20s. A silently dead link (mobile network
+     * handover, NAT idle timeout) produces no read error until something is
+     * written; the ping surfaces it so the reconnect can start.
+     */
+    private void startKeepalive() {
+        stopKeepalive();
+        keepaliveThread = new Thread(() -> {
+            while (!Thread.currentThread().isInterrupted()) {
+                try {
+                    Thread.sleep(KEEPALIVE_INTERVAL_MS);
+                } catch (InterruptedException e) {
+                    return;
+                }
+                com.trilead.ssh2.Session s = session;
+                if (s == null) {
+                    return;
+                }
+                try {
+                    s.ping();
+                } catch (Throwable t) {
+                    Log.w(TAG, "keepalive ping failed: " + t.getMessage());
+                    Runnable r = onTransportLost;
+                    if (r != null) {
+                        r.run();
+                    }
+                    return;
+                }
+            }
+        }, "SSH-Keepalive");
+        keepaliveThread.setDaemon(true);
+        keepaliveThread.start();
+    }
+
+    private void stopKeepalive() {
+        Thread t = keepaliveThread;
+        keepaliveThread = null;
+        if (t != null) {
+            t.interrupt();
+        }
     }
 
     /**
@@ -201,6 +265,7 @@ public final class SshTerminalConnection {
      * Safe to call multiple times; safe to call from any thread.
      */
     public void close() {
+        stopKeepalive();
         if (session != null) {
             try {
                 session.close();

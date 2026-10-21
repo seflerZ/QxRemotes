@@ -839,6 +839,9 @@ aSPICE对应的功能如下：
     <string name="hide_connection_thumbnails">不保存缩略图</string>
     <string name="show_only_connection_nicknames">只显示昵称</string>
     <string name="warn_disconnect_will_reconnect">连接异常断开（用户从其他主机登录或网络中断），重连中。</string>
+    <string name="ssh_reconnect_lost">SSH 连接断开，正在重连…</string>
+    <string name="ssh_reconnect_ok">SSH 已重连。</string>
+    <string name="ssh_reconnect_failed">SSH 重连失败，关闭会话。</string>
     <string name="show_privacy_policy">查看隐私政策</string>
     <string name="request_recording_parameter_title">将申请录音权限</string>
     <string name="request_recording_parameter_description">申请此权限将手机的麦克风用于远程录音输入，例如在远端参加语音、视频会议时使用。</string>
