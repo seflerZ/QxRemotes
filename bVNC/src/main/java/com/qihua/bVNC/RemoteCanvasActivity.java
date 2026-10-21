@@ -2260,7 +2260,9 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
             // Activity-level hook: the input handler below consumes most
             // touches before they reach the touchpad view, so the idle clock
             // is tracked here instead of in RemoteCanvas.dispatchTouchEvent.
-            if (touchpad != null && touchpad.isPhoneTouchpad()) {
+            // External mouse input must not wake or dismiss the clock.
+            if (touchpad != null && touchpad.isPhoneTouchpad()
+                    && !event.isFromSource(InputDevice.SOURCE_MOUSE)) {
                 if (touchpad.hideIdleClock()) {
                     return true; // a tap dismissing the clock is not a remote click
                 }
@@ -2305,12 +2307,6 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
     @Override
     public boolean onGenericMotionEvent(MotionEvent event) {
         try {
-            if (touchpad != null && touchpad.isPhoneTouchpad()) {
-                if (touchpad.hideIdleClock()) {
-                    return true;
-                }
-                touchpad.noteUserInteraction();
-            }
             return inputHandler.onTouchEvent(event);
         } catch (Exception ignored) {
         }

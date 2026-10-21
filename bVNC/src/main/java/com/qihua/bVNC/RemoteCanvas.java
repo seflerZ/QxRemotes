@@ -44,7 +44,6 @@ import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 import android.os.Handler;
 import android.os.Looper;
-import android.os.SystemClock;
 import android.text.ClipboardManager;
 import android.text.InputType;
 import android.util.AttributeSet;
@@ -245,8 +244,6 @@ public class RemoteCanvas extends SurfaceView implements Viewable
     private boolean clockShowing = false;
     private boolean clockDismissGesture = false;
     private int surfaceWidth, surfaceHeight;
-    private long clockStartMs = 0L;
-    private final Paint clockBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private static final long CLOCK_FRAME_MS = 250L;
 
     private final Runnable clockTick = new Runnable() {
@@ -263,7 +260,6 @@ public class RemoteCanvas extends SurfaceView implements Viewable
         public void run() {
             if (outDisplay || !touchpad || !isAttachedToWindow()) return;
             clockShowing = true;
-            clockStartMs = SystemClock.uptimeMillis();
             drawClock();
             idleHandler.postDelayed(clockTick, CLOCK_FRAME_MS);
         }
@@ -371,7 +367,8 @@ public class RemoteCanvas extends SurfaceView implements Viewable
 
     @Override
     public boolean dispatchTouchEvent(MotionEvent event) {
-        if (!outDisplay && touchpad) {
+        if (!outDisplay && touchpad
+                && !event.isFromSource(android.view.InputDevice.SOURCE_MOUSE)) {
             if (clockShowing) {
                 hideIdleClock();
                 clockDismissGesture = true;
@@ -393,12 +390,8 @@ public class RemoteCanvas extends SurfaceView implements Viewable
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
-        if (!outDisplay && touchpad) {
-            if (clockShowing) {
-                hideIdleClock();
-            }
-            noteUserInteraction();
-        }
+        // Hardware keys (external keyboard, volume/back) must not wake or
+        // dismiss the idle clock; only phone-screen touches count.
         return super.dispatchKeyEvent(event);
     }
 
@@ -1958,11 +1951,17 @@ public class RemoteCanvas extends SurfaceView implements Viewable
                 drawClockBackground(canvas, width, height);
 
                 Date now = new Date();
+                Locale locale = Locale.getDefault();
                 String time = android.text.format.DateFormat.getTimeFormat(getContext()).format(now);
                 String date = new java.text.SimpleDateFormat(
-                        android.text.format.DateFormat.getBestDateTimePattern(
-                                Locale.getDefault(), "MMMEd"),
-                        Locale.getDefault()).format(now);
+                        android.text.format.DateFormat.getBestDateTimePattern(locale, "MMMEd"),
+                        locale).format(now);
+                // CLDR glues the weekday onto the date ("10月20日周一"); keep a gap.
+                String dow = new java.text.SimpleDateFormat("E", locale).format(now);
+                if (date.length() > dow.length() && date.endsWith(dow)
+                        && !Character.isWhitespace(date.charAt(date.length() - dow.length() - 1))) {
+                    date = date.substring(0, date.length() - dow.length()) + " " + dow;
+                }
 
                 Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
                 paint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.NORMAL));
@@ -1970,7 +1969,7 @@ public class RemoteCanvas extends SurfaceView implements Viewable
                 float cx = width / 2f;
 
                 float dateSize = Math.min(width, height) * 0.065f;
-                paint.setColor(0xffa8adb6);
+                paint.setColor(0xff7a7d84);
                 paint.setTextSize(dateSize);
                 float dateWidth = paint.measureText(date);
                 if (dateWidth > width * 0.9f) {
@@ -1978,7 +1977,7 @@ public class RemoteCanvas extends SurfaceView implements Viewable
                 }
                 canvas.drawText(date, cx, height * 0.33f, paint);
 
-                paint.setColor(0xffd2d4d8);
+                paint.setColor(0xff98999c);
                 float timeSize = Math.min(width, height) * 0.30f;
                 paint.setTextSize(timeSize);
                 float timeWidth = paint.measureText(time);
@@ -1997,33 +1996,9 @@ public class RemoteCanvas extends SurfaceView implements Viewable
         }
     }
 
-    /** Slow, dark aurora drift behind the clock — magazine-wallpaper vibe. */
+    /** Plain dark background behind the clock. */
     private void drawClockBackground(Canvas canvas, int width, int height) {
         canvas.drawColor(0xff05060a);
-
-        float t = (SystemClock.uptimeMillis() - clockStartMs) / 1000f;
-        float min = Math.min(width, height);
-
-        drawGlow(canvas, width, height,
-                width * (0.32f + 0.10f * (float) Math.sin(t * 0.13f)),
-                height * (0.36f + 0.10f * (float) Math.cos(t * 0.10f)),
-                min * (0.85f + 0.06f * (float) Math.sin(t * 0.08f)), 0x8a2b5fd0);
-        drawGlow(canvas, width, height,
-                width * (0.70f + 0.10f * (float) Math.cos(t * 0.11f + 1.7f)),
-                height * (0.62f + 0.10f * (float) Math.sin(t * 0.09f)),
-                min * (0.75f + 0.05f * (float) Math.cos(t * 0.07f)), 0x7c6a35c8);
-        drawGlow(canvas, width, height,
-                width * (0.50f + 0.12f * (float) Math.sin(t * 0.07f + 2.4f)),
-                height * (0.22f + 0.10f * (float) Math.cos(t * 0.10f + 0.8f)),
-                min * (0.65f + 0.05f * (float) Math.sin(t * 0.06f + 1.2f)), 0x6612a89a);
-    }
-
-    private void drawGlow(Canvas canvas, int width, int height,
-                          float cx, float cy, float radius, int color) {
-        clockBgPaint.setShader(new android.graphics.RadialGradient(
-                cx, cy, radius, color, color & 0x00ffffff,
-                android.graphics.Shader.TileMode.CLAMP));
-        canvas.drawRect(0f, 0f, width, height, clockBgPaint);
     }
 
     public long getLastDrawMs() {
