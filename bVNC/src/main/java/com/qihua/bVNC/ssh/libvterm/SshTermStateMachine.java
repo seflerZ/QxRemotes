@@ -262,15 +262,23 @@ public final class SshTermStateMachine {
 
     /**
      * Forget the modes the previous remote program had asked for (mouse
-     * reporting, synchronized output). Called when the SSH transport is
-     * replaced: the new remote is a different program that has not asked
-     * for anything yet. Without this, mouse events keep being encoded as
-     * mouse escape sequences and get printed as garbage by the new shell.
+     * reporting, synchronized output, hidden cursor). Called when the SSH
+     * transport is replaced: the new remote is a different program that
+     * has not asked for anything yet. Without this, mouse events keep
+     * being encoded as mouse escape sequences and get printed as garbage
+     * by the new shell, and the cursor stays invisible because the new
+     * shell never sends ?25h.
+     *
+     * <p>Also parks the viewport back at the live bottom: while the view
+     * is scrolled into the history the cursor is (by design) not painted,
+     * so a stale scroll offset looks exactly like "the cursor vanished".
      */
     public void resetRemoteModes() {
         synchronized (this) {
             if (nativeHandle == 0) return;
             nativeResetRemoteModes(nativeHandle);
+            scrollOffsetRows = 0;
+            scrollAccumPx = 0f;
         }
     }
 
