@@ -49,6 +49,11 @@ public class SshTerminalRenderer {
     private final Context ctx;
     private final byte[] readBuffer = new byte[4096];
 
+    /** Bytes received from the remote shell so far. */
+    private volatile long bytesRead = 0;
+    /** uptimeMillis of the last byte received from the shell. 0 = nothing yet. */
+    private volatile long lastOutputAtMs = 0;
+
     private SshTermStateMachine stateMachine;
     private VTermCanvasRenderer canvasRenderer;
     private int currentCols = -1;
@@ -198,6 +203,8 @@ public class SshTerminalRenderer {
                     }
                     if (n > 0) {
                         totalRead += n;
+                        bytesRead += n;
+                        lastOutputAtMs = android.os.SystemClock.uptimeMillis();
                         if (stateMachine != null) {
                             stateMachine.write(readBuffer, 0, n);
                         }
@@ -289,6 +296,26 @@ public class SshTerminalRenderer {
             // the right value.
             if (Character.isSupplementaryCodePoint(cp)) i++;
         }
+    }
+
+    /** Bytes received from the remote shell so far. */
+    public long getBytesRead() {
+        return bytesRead;
+    }
+
+    /**
+     * True when the shell has produced output and has been quiet for
+     * {@code quietMs}. The remote shell is only ready for input once its
+     * prompt has settled: typing earlier races with the shell's startup
+     * (bash/readline do tcsetattr(TCSAFLUSH), which discards input that
+     * was typed before the shell finished initializing).
+     */
+    public boolean isShellIdle(long quietMs) {
+        long last = lastOutputAtMs;
+        if (last == 0 || bytesRead == 0) {
+            return false;
+        }
+        return android.os.SystemClock.uptimeMillis() - last >= quietMs;
     }
 
     /**

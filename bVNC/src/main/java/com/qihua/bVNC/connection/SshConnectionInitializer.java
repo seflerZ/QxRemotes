@@ -87,6 +87,12 @@ public class SshConnectionInitializer extends ConnectionInitializer {
 
     /** 5 FPS heartbeat — catches shell bursts that UpdateCallback misses. */
     private static final long HEARTBEAT_INTERVAL_MS = 200L;
+    /** Shell quiet time that means "the prompt has settled, type now". */
+    private static final long STARTUP_CMD_IDLE_MS = 400L;
+    /** How often we re-check whether the shell is ready. */
+    private static final long STARTUP_CMD_POLL_MS = 100L;
+    /** Give up waiting for the shell after this long and type anyway. */
+    private static final long STARTUP_CMD_TIMEOUT_MS = 8000L;
     private volatile long lastPaintAt = 0;
     /** Minimum gap between paints (~60 FPS). Without it a TUI's end-of-frame
      *  static re-dump paints once per 4K read chunk and visibly scrolls. */
@@ -322,14 +328,40 @@ public class SshConnectionInitializer extends ConnectionInitializer {
     }
 
     /** Type startup command into shell. CR not LF (matches Enter key).
-     *  Posted to main: writing from SSH-Connect thread kills writePump with "Write end dead". */
+     *  Posted to main: writing from SSH-Connect thread kills writePump with "Write end dead".
+     *
+     *  <p>Not sent right away: the remote shell needs a moment to start
+     *  (rc files, readline setup). Input typed before the shell is ready
+     *  gets discarded - bash/readline call tcsetattr(TCSAFLUSH), which
+     *  throws away whatever was typed too early. So wait until the shell
+     *  has printed something and then gone quiet (its prompt settled),
+     *  and only then type the command. */
     private void sendStartupCommand() {
         if (sshStartupCommand == null || renderer == null || canvas == null) return;
         final String cmd = sshStartupCommand.trim();
         if (cmd.isEmpty()) return;
-        Log.i(TAG, "doConnect: sending startup command");
-        canvas.handler.post(() -> {
-            if (renderer != null) renderer.writeString(cmd + "\r");
+        Log.i(TAG, "doConnect: waiting for the shell to be ready before sending startup command");
+        final long deadline = android.os.SystemClock.uptimeMillis() + STARTUP_CMD_TIMEOUT_MS;
+        canvas.handler.post(new Runnable() {
+            @Override
+            public void run() {
+                if (renderer == null || canvas == null || canvas.handler == null) {
+                    return;
+                }
+                boolean gotOutput = renderer.getBytesRead() > 0;
+                if (gotOutput && renderer.isShellIdle(STARTUP_CMD_IDLE_MS)) {
+                    Log.i(TAG, "shell is up and idle, sending startup command");
+                    renderer.writeString(cmd + "\r");
+                    return;
+                }
+                if (android.os.SystemClock.uptimeMillis() >= deadline) {
+                    Log.w(TAG, "shell not idle after " + STARTUP_CMD_TIMEOUT_MS
+                            + "ms, sending startup command anyway");
+                    renderer.writeString(cmd + "\r");
+                    return;
+                }
+                canvas.handler.postDelayed(this, STARTUP_CMD_POLL_MS);
+            }
         });
     }
 
