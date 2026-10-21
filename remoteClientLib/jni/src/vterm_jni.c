@@ -660,6 +660,22 @@ Java_com_qihua_bVNC_ssh_libvterm_SshTermStateMachine_nativeIsSyncOutput(
     return h->sync_output ? JNI_TRUE : JNI_FALSE;
 }
 
+// Clear the modes the REMOTE asked for. Used after a reconnect: the remote
+// is a brand new program, so it has not asked for mouse reporting yet and
+// is not inside a synchronized-output block. Leaving the old flags set
+// makes us push mouse escape sequences into a shell that never asked for
+// them (garbage on screen) and can wedge the paint path (sync_output
+// stuck at 1 → the terminal never paints again).
+JNIEXPORT void JNICALL
+Java_com_qihua_bVNC_ssh_libvterm_SshTermStateMachine_nativeResetRemoteModes(
+        JNIEnv *env, jclass clazz, jlong handle) {
+    (void) clazz;
+    jhandle_t *h = getHandle(env, handle);
+    if (!h) return;
+    h->mouse_mode = VTERM_PROP_MOUSE_NONE;
+    h->sync_output = 0;
+}
+
 // True iff the remote app has turned on DECSET 1000 (click reporting)
 // — 1002 (drag) and 1003 (move) imply 1000 in libvterm, so any non-NONE
 // value means mouse-mode is live and vterm_mouse_button will emit

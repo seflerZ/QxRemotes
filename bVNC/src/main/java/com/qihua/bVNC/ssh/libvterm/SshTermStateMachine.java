@@ -261,6 +261,20 @@ public final class SshTermStateMachine {
     }
 
     /**
+     * Forget the modes the previous remote program had asked for (mouse
+     * reporting, synchronized output). Called when the SSH transport is
+     * replaced: the new remote is a different program that has not asked
+     * for anything yet. Without this, mouse events keep being encoded as
+     * mouse escape sequences and get printed as garbage by the new shell.
+     */
+    public void resetRemoteModes() {
+        synchronized (this) {
+            if (nativeHandle == 0) return;
+            nativeResetRemoteModes(nativeHandle);
+        }
+    }
+
+    /**
      * Forward a mouse event into libvterm. libvterm will emit the
      * terminal-protocol byte sequence (\e[<code;col+1;row+1M for SGR,
      * etc.) into the output buffer, which we drain and write to the SSH
@@ -527,6 +541,7 @@ public final class SshTermStateMachine {
     private static native byte[] nativeDrainOutput(long h);
     private static native boolean nativeIsSyncOutput(long h);
     private static native boolean nativeIsMouseEnabled(long h);
+    private static native void nativeResetRemoteModes(long h);
     private static native byte[] nativeSendMouseButton(long h, int button, boolean pressed, int row, int col, int mods);
 
     private static native boolean nativePollDirty(long h);

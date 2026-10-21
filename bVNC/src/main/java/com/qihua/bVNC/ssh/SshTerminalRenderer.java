@@ -266,6 +266,11 @@ public class SshTerminalRenderer {
         this.channel = newChannel;
         if (stateMachine != null) {
             stateMachine.setOutputStream(newChannel.getTerminalOut());
+            // The new remote is a different program — it hasn't asked for
+            // mouse reporting yet. Drop the old flags, otherwise every
+            // click/wheel would be encoded as a mouse escape sequence and
+            // printed as garbage by the new shell.
+            stateMachine.resetRemoteModes();
         }
         bytesRead = 0;
         lastOutputAtMs = 0;
