@@ -511,7 +511,8 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
                 if (isToolbarShow) {
                     SshConnectionInitializer ssh =
                             (SshConnectionInitializer) canvas.connInitializer;
-                    cursorIsInKeyboard = ssh.getCursorPixelY() + keyboardHeight - canvas.getHeight() > 0;
+                    cursorIsInKeyboard = ssh.getCursorPixelY() + ssh.getCellHeight() / 2f
+                            + keyboardHeight - canvas.getHeight() > 0;
                     cursorStateChangedAt = 0L;
                 }
                 repanCanvas4SSH(isToolbarShow);
@@ -2400,7 +2401,11 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
     public void repanCanvas4SSH(boolean isShow) {
         com.qihua.bVNC.connection.SshConnectionInitializer ssh =
                 (com.qihua.bVNC.connection.SshConnectionInitializer) canvas.connInitializer;
-        float panDistance = ssh.getCursorPixelY() + keyboardHeight - canvas.getHeight();
+        // The cursor Y is the *bottom* of the cell — panning exactly that
+        // much leaves the cursor flush against the keyboard. Leave half a
+        // cell of slack so the cursor is not glued to the keyboard edge.
+        float panDistance = ssh.getCursorPixelY() + ssh.getCellHeight() / 2f
+                + keyboardHeight - canvas.getHeight();
 
         if (isShow) {
             boolean nowInKeyboard = panDistance > 0;
