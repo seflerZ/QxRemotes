@@ -13,6 +13,12 @@
     <color name="white">#FFFFFFFF</color>
     <color name="green">#FF009f00</color>
 
+    <!-- Recent connections bubble shown under the search box. -->
+    <color name="recent_popup_bg">#FF313131</color>
+    <color name="recent_popup_title">#99FFFFFF</color>
+    <color name="recent_popup_detail">#8AFFFFFF</color>
+    <color name="recent_popup_divider">#1FFFFFFF</color>
+
     <!-- Extra keys colors. -->
     <color name="extraKeysButtonTextColor">@color/white</color>
     <color name="extraKeysButtonActiveTextColor">@color/theme</color>

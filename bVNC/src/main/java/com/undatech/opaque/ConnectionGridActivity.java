@@ -36,11 +36,13 @@ import android.content.SharedPreferences;
 import android.content.SharedPreferences.Editor;
 import android.content.res.Configuration;
 import android.graphics.Color;
+import android.graphics.drawable.ColorDrawable;
 import android.os.Build;
 import android.os.Bundle;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.util.Log;
+import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.MenuInflater;
@@ -56,7 +58,10 @@ import android.widget.AdapterView.OnItemLongClickListener;
 import android.widget.ArrayAdapter;
 import android.widget.EditText;
 import android.widget.GridView;
+import android.widget.FrameLayout;
 import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.PopupWindow;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -83,6 +88,7 @@ import com.undatech.opaque.util.ConnectionLoader;
 import com.undatech.opaque.util.FileUtils;
 import com.undatech.opaque.util.GeneralUtils;
 import com.undatech.opaque.util.LogcatReader;
+import com.undatech.opaque.util.RecentConnectionsStore;
 import com.qihua.bVNC.R;
 
 import java.io.ByteArrayInputStream;
@@ -108,6 +114,9 @@ public class ConnectionGridActivity extends AppCompatActivity implements GetText
     private Context appContext;
     private GridView gridView;
     private EditText search;
+    private PopupWindow recentConnectionsPopup;
+    private Map<String, Connection> connectionsById = new HashMap<>();
+    private boolean connectionsLoaded = false;
     private boolean isConnecting = false;
     private boolean togglingMasterPassword = false;
     private AppCompatImageButton addNewConnection = null;
@@ -182,7 +191,26 @@ public class ConnectionGridActivity extends AppCompatActivity implements GetText
 
             @Override
             public void afterTextChanged(Editable s) {
+                if (s.length() > 0) {
+                    dismissRecentConnectionsPopup();
+                }
                 createAndSetLabeledImageAdapterAndNumberOfColumns();
+            }
+        });
+
+        search.setOnClickListener(v -> showRecentConnectionsPopup());
+        // OnClickListener on an EditText is unreliable on the very first tap (the
+        // tap that focuses it), so also react to the touch itself. Returning false
+        // lets the EditText keep handling focus and the soft keyboard.
+        search.setOnTouchListener((v, event) -> {
+            if (event.getActionMasked() == android.view.MotionEvent.ACTION_DOWN) {
+                showRecentConnectionsPopup();
+            }
+            return false;
+        });
+        search.setOnFocusChangeListener((v, hasFocus) -> {
+            if (!hasFocus) {
+                dismissRecentConnectionsPopup();
             }
         });
 
@@ -231,6 +259,7 @@ public class ConnectionGridActivity extends AppCompatActivity implements GetText
 
     private void createAndSetLabeledImageAdapterAndNumberOfColumns() {
         Map<String, Connection> connectionsByPosition = getConnectionLoader(this).loadConnectionsById();
+        connectionsById = connectionsByPosition;
 
         LabeledImageApapter labeledImageApapter = new LabeledImageApapter(
                 ConnectionGridActivity.this,
@@ -240,6 +269,12 @@ public class ConnectionGridActivity extends AppCompatActivity implements GetText
     }
 
     private void launchConnection(View v) {
+        String id = (String) ((TextView) v.findViewById(R.id.grid_item_id)).getText();
+        launchConnectionById(id);
+    }
+
+    private void launchConnectionById(String id) {
+        dismissRecentConnectionsPopup();
         Utils.hideKeyboard(this, getCurrentFocus());
         android.util.Log.i(TAG, "Launch Connection");
 
@@ -252,7 +287,6 @@ public class ConnectionGridActivity extends AppCompatActivity implements GetText
             System.gc();
 
         isConnecting = true;
-        String id = (String) ((TextView) v.findViewById(R.id.grid_item_id)).getText();
 
         // Treat connection with id "$NC" as add new connection button
         if (id.equals("$NC")) {
@@ -264,14 +298,180 @@ public class ConnectionGridActivity extends AppCompatActivity implements GetText
         ConnectionLoader connectionLoader = getConnectionLoader(this);
         if (Utils.isOpaque(this)) {
             ConnectionSettings cs = (ConnectionSettings) connectionLoader.getConnections().get(id);
+            if (cs == null) {
+                return;
+            }
             cs.loadFromSharedPreferences(appContext);
             intent.putExtra("com.undatech.opaque.ConnectionSettings", cs);
         } else {
             ConnectionBean conn = (ConnectionBean) connectionLoader.getConnections().get(id);
+            if (conn == null) {
+                return;
+            }
             intent.putExtra(Utils.getConnectionString(appContext), conn.gen_getPersistentBundle());
         }
 
+        RecentConnectionsStore.recordAccess(this, id);
         startActivity(intent);
+    }
+
+    private void showRecentConnectionsPopup() {
+        if (!connectionsLoaded || isFinishing() || isDestroyed() || search.getWidth() == 0) {
+            return;
+        }
+        if (search.getText().length() > 0) {
+            return;
+        }
+        if (recentConnectionsPopup != null && recentConnectionsPopup.isShowing()) {
+            return;
+        }
+
+        List<Connection> recents = loadRecentConnections();
+        if (recents.isEmpty()) {
+            return;
+        }
+        dismissRecentConnectionsPopup();
+
+        View content = getLayoutInflater().inflate(R.layout.recent_connections_popup, null);
+        LinearLayout container = content.findViewById(R.id.recentConnectionsContainer);
+        for (int i = 0; i < recents.size(); i++) {
+            if (i > 0) {
+                View divider = new View(this);
+                divider.setBackgroundResource(R.drawable.divider_recent_connections);
+                container.addView(divider, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, dpToPixels(1)));
+            }
+            container.addView(createRecentConnectionRow(container, recents.get(i)));
+        }
+
+        int windowWidth = getWindow().getDecorView().getWidth();
+        int bubbleWidth = Math.min(search.getWidth() - dpToPixels(16), dpToPixels(320));
+        if (bubbleWidth <= 0) {
+            bubbleWidth = Math.min(windowWidth - dpToPixels(16), dpToPixels(320));
+        }
+
+        PopupWindow popup = new PopupWindow(content, bubbleWidth, ViewGroup.LayoutParams.WRAP_CONTENT, false);
+        popup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        popup.setOutsideTouchable(true);
+        popup.setOnDismissListener(() -> recentConnectionsPopup = null);
+
+        // The bubble is centered under the search box and the arrow is centered in the
+        // bubble, so the tip lands on the middle of the search box.
+        int[] anchorLocation = new int[2];
+        search.getLocationInWindow(anchorLocation);
+        int xoff = (search.getWidth() - bubbleWidth) / 2;
+        int margin = dpToPixels(8);
+        if (anchorLocation[0] + xoff < margin) {
+            xoff += margin - (anchorLocation[0] + xoff);
+        }
+        if (anchorLocation[0] + xoff + bubbleWidth > windowWidth - margin) {
+            xoff -= anchorLocation[0] + xoff + bubbleWidth - (windowWidth - margin);
+        }
+
+        popup.showAsDropDown(search, xoff, dpToPixels(4), Gravity.TOP | Gravity.LEFT);
+        // Not enough room below: the window flips above the anchor, so point the arrow down.
+        if (popup.isAboveAnchor()) {
+            content.findViewById(R.id.recentConnectionsArrowTop).setVisibility(View.GONE);
+            content.findViewById(R.id.recentConnectionsArrowBottom).setVisibility(View.VISIBLE);
+            View bubble = content.findViewById(R.id.recentConnectionsBubble);
+            FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) bubble.getLayoutParams();
+            lp.topMargin = 0;
+            lp.bottomMargin = dpToPixels(10);
+            bubble.setLayoutParams(lp);
+        }
+        recentConnectionsPopup = popup;
+    }
+
+    private View createRecentConnectionRow(LinearLayout parent, Connection connection) {
+        View row = getLayoutInflater().inflate(R.layout.recent_connection_row, parent, false);
+        ImageView icon = row.findViewById(R.id.recentConnectionIcon);
+        TextView label = row.findViewById(R.id.recentConnectionLabel);
+        TextView detail = row.findViewById(R.id.recentConnectionDetail);
+
+        icon.setImageResource(getIconForConnection(connection));
+        String labelText = Utils.isNullOrEmptry(connection.getLabel()) ? "" : connection.getLabel();
+        label.setText(labelText);
+
+        String address = connection.getAddress();
+        String detailText = Utils.isNullOrEmptry(address) ? "" : address;
+        if (connection.getPort() != 0) {
+            detailText = detailText.isEmpty()
+                    ? Integer.toString(connection.getPort())
+                    : detailText + ":" + connection.getPort();
+        }
+        if (!Utils.isNullOrEmptry(connection.getUserName())) {
+            detailText = connection.getUserName() + "@" + detailText;
+        }
+        detail.setText(detailText);
+
+        row.setContentDescription(labelText + " " + detailText);
+        row.setOnClickListener(v -> launchConnectionById(connection.getId()));
+        return row;
+    }
+
+    private List<Connection> loadRecentConnections() {
+        List<Connection> recents = new ArrayList<>();
+        for (String id : RecentConnectionsStore.getRecentIds(this)) {
+            Connection connection = connectionsById.get(id);
+            if (connection != null) {
+                recents.add(connection);
+                if (recents.size() == RecentConnectionsStore.MAX_SHOWN) {
+                    break;
+                }
+            }
+        }
+        if (recents.isEmpty()) {
+            // First run after upgrading: no history yet, approximate it with the
+            // connections whose thumbnails were saved most recently.
+            recents = loadRecentsFromThumbnailTimes();
+        }
+        return recents;
+    }
+
+    private List<Connection> loadRecentsFromThumbnailTimes() {
+        List<Connection> withThumbnail = new ArrayList<>();
+        Map<String, Long> modifiedById = new HashMap<>();
+        for (Connection connection : connectionsById.values()) {
+            String filename = connection.getScreenshotFilename();
+            if (filename == null) {
+                continue;
+            }
+            File thumbnail = new File(getFilesDir(), filename);
+            if (thumbnail.exists()) {
+                withThumbnail.add(connection);
+                modifiedById.put(connection.getId(), thumbnail.lastModified());
+            }
+        }
+        withThumbnail.sort((a, b) -> Long.compare(
+                modifiedById.get(b.getId()), modifiedById.get(a.getId())));
+        if (withThumbnail.size() > RecentConnectionsStore.MAX_SHOWN) {
+            return new ArrayList<>(withThumbnail.subList(0, RecentConnectionsStore.MAX_SHOWN));
+        }
+        return withThumbnail;
+    }
+
+    private int getIconForConnection(Connection connection) {
+        switch (connection.getConnectionType()) {
+            case Constants.CONN_TYPE_SSH:
+                return R.drawable.ssh_connection;
+            case Constants.CONN_TYPE_NVSTREAM:
+                return R.drawable.nvstream_connection;
+            case Constants.CONN_TYPE_RDP:
+                return R.drawable.rdp_connection_2;
+            default:
+                return R.drawable.vnc_connection;
+        }
+    }
+
+    private int dpToPixels(int dp) {
+        return Math.round(dp * getResources().getDisplayMetrics().density);
+    }
+
+    private void dismissRecentConnectionsPopup() {
+        if (recentConnectionsPopup != null) {
+            recentConnectionsPopup.dismiss();
+            recentConnectionsPopup = null;
+        }
     }
 
     private void editConnection(View v) {
@@ -327,6 +527,7 @@ public class ConnectionGridActivity extends AppCompatActivity implements GetText
                             conn.Gen_delete(database.getWritableDatabase());
                             database.close();
                         }
+                        RecentConnectionsStore.remove(ConnectionGridActivity.this, id);
                         onResume();
                     }
                 }, null);
@@ -380,6 +581,7 @@ public class ConnectionGridActivity extends AppCompatActivity implements GetText
     protected void onPause() {
         super.onPause();
         Log.i(TAG, "onPause");
+        dismissRecentConnectionsPopup();
         if (database != null)
             database.close();
     }
@@ -398,6 +600,7 @@ public class ConnectionGridActivity extends AppCompatActivity implements GetText
 
     private void loadSavedConnections() {
         createAndSetLabeledImageAdapterAndNumberOfColumns();
+        connectionsLoaded = true;
     }
 
     private static class ConnectionType {

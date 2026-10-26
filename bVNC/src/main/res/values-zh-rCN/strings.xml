@@ -802,6 +802,7 @@ aSPICE对应的功能如下：
     <string name="show">"显示"</string>
     <string name="hide">"隐藏"</string>
     <string name="search_connections">搜索连接</string>
+    <string name="recent_connections">最近访问</string>
     <string name="user_not_specified">未指定用户</string>
     <string name="enter_ssh_credentials">请输入SSH凭证</string>
     <string name="enter_vnc_credentials">请输入VNC凭证</string>

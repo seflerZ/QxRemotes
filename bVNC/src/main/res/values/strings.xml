@@ -879,6 +879,7 @@ When you add or edit a connection, you will see a connection configuration page.
     <string name="show">"Show"</string>
     <string name="hide">"Hide"</string>
     <string name="search_connections">Search Connections</string>
+    <string name="recent_connections">Recent Connections</string>
     <string name="user_not_specified">User not specified</string>
     <string name="enter_ssh_credentials">Please enter SSH credentials</string>
     <string name="enter_vnc_credentials">Please enter VNC credentials</string>

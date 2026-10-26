@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content">
+
+    <LinearLayout
+        android:id="@+id/recentConnectionsBubble"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:background="@drawable/bg_recent_connections_popup"
+        android:clipToOutline="true"
+        android:orientation="vertical"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp">
+
+        <TextView
+            android:id="@+id/recentConnectionsTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingStart="14dp"
+            android:paddingEnd="14dp"
+            android:paddingBottom="4dp"
+            android:text="@string/recent_connections"
+            android:textColor="@color/recent_popup_title"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <LinearLayout
+            android:id="@+id/recentConnectionsContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+    </LinearLayout>
+
+    <!-- Arrows are drawn after the bubble so their fill covers the bubble's
+         top/bottom border stroke at the junction. 1dp of overlap. -->
+    <ImageView
+        android:id="@+id/recentConnectionsArrowTop"
+        android:layout_width="20dp"
+        android:layout_height="11dp"
+        android:layout_gravity="top|center_horizontal"
+        android:importantForAccessibility="no"
+        android:src="@drawable/ic_recent_popup_arrow" />
+
+    <ImageView
+        android:id="@+id/recentConnectionsArrowBottom"
+        android:layout_width="20dp"
+        android:layout_height="11dp"
+        android:layout_gravity="bottom|center_horizontal"
+        android:importantForAccessibility="no"
+        android:rotation="180"
+        android:src="@drawable/ic_recent_popup_arrow"
+        android:visibility="gone" />
+</FrameLayout>
