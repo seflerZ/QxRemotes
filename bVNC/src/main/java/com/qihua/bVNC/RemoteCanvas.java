@@ -244,7 +244,7 @@ public class RemoteCanvas extends SurfaceView implements Viewable
     private boolean clockShowing = false;
     private boolean clockDismissGesture = false;
     private int surfaceWidth, surfaceHeight;
-    private static final long CLOCK_FRAME_MS = 250L;
+    private static final long CLOCK_FRAME_MS = 1000L;
 
     private final Runnable clockTick = new Runnable() {
         @Override
