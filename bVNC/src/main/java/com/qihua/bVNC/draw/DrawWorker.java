@@ -2,7 +2,11 @@ package com.qihua.bVNC.draw;
 
 import android.graphics.Canvas;
 import android.graphics.PorterDuff;
+import android.os.Handler;
+import android.os.HandlerThread;
+import android.os.Process;
 import android.util.Log;
+import android.view.Choreographer;
 import android.view.SurfaceHolder;
 
 import com.qihua.bVNC.Constants;
@@ -10,48 +14,51 @@ import com.qihua.bVNC.RemoteCanvas;
 import com.qihua.bVNC.Utils;
 import com.undatech.opaque.DrawTask;
 
-import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Pulls DrawTasks off a queue and paints them onto the canvas's
- * SurfaceHolder on a dedicated thread.
+ * Paints DrawTasks onto the canvas's SurfaceHolder from a dedicated thread,
+ * paced by the display's vsync signal.
  *
- * Throttling rules:
- *   - only the newest pending frame is kept (older ones are dropped)
- *   - run skips drawing if the previous draw was < 13 ms ago
- *   - frames older than 16 ms count as drops (when isCount() is true)
+ * Pacing rules:
+ *   - at most one draw per vsync; only the newest pending frame is kept
+ *   - pointer-only refreshes are capped to ~60 fps (every other vsync on a
+ *     120 Hz panel); image frames are never dropped
  *
- * The old implementation used an unbounded queue and coalesced against the
- * *head* of the queue, so frames piled up and were drawn in clumps - that is
- * what the "micro stutter" was. Keeping only the newest frame makes the
- * pipeline self-throttling: if we fall behind, the stale frames are simply
- * replaced by the next one that arrives.
+ * Drawing on data arrival instead of on vsync lets the post phase drift around
+ * the vsync boundary. Consecutive frames then land in different presentation
+ * slots (16.7 ms / 33.3 ms alternating), which reads as micro stutter - most
+ * visible while the whole picture pans.
  *
- * Lifecycle: constructor starts the thread; call stop() to terminate
- * cleanly.
+ * Lifecycle: constructor starts the thread; call stop() to terminate cleanly.
  */
-public class DrawWorker implements Runnable {
+public class DrawWorker {
     private static final String TAG = "DrawWorker";
+    private static final long MIN_POINTER_FRAME_INTERVAL_NANOS = 13_000_000L;
 
     private final RemoteCanvas canvas;
-    private final Thread thread;
+    private final HandlerThread thread;
+    private final Handler handler;
     /** The newest frame waiting to be drawn. */
     private final AtomicReference<DrawTask> pending = new AtomicReference<>();
-    /** Wakes up the draw thread when a new frame shows up. */
-    private final Semaphore signal = new Semaphore(0);
+    /** True while a vsync callback is owed to us. */
+    private final AtomicBoolean frameScheduled = new AtomicBoolean(false);
     private final boolean showFps;
 
+    private Choreographer choreographer;
     private volatile boolean running = true;
     private volatile long lastDraw;
+    private long lastFrameNanos;
 
     public DrawWorker(RemoteCanvas canvas) {
         this.canvas = canvas;
         this.showFps = Utils.querySharedPreferenceBoolean(canvas.getContext(),
                 Constants.enableDebugInfo, false);
 
-        this.thread = new Thread(this, "DrawWorker");
+        this.thread = new HandlerThread("DrawWorker", Process.THREAD_PRIORITY_DISPLAY);
         this.thread.start();
+        this.handler = new Handler(thread.getLooper());
     }
 
     public void count() {
@@ -63,13 +70,14 @@ public class DrawWorker implements Runnable {
     /** Keep only the newest frame - anything older is already stale. */
     public void addTask(DrawTask task) {
         pending.set(task);
-        signal.release();
+        scheduleFrame();
     }
 
     /** Stop the worker thread. Idempotent. */
     public void stop() {
         running = false;
-        signal.release();
+        handler.removeCallbacksAndMessages(null);
+        thread.quitSafely();
         try {
             thread.join(500);
         } catch (InterruptedException e) {
@@ -85,76 +93,109 @@ public class DrawWorker implements Runnable {
         return canvas.fpsCounter != null;
     }
 
-    @Override
-    public void run() {
-        // Display priority, not URGENT_AUDIO: this thread used to run at -16 and
-        // outranked the audio decode threads (native pthreads at nice 0), so a
-        // full-frame blit could starve audio and cause audible dropouts.
-        android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_DISPLAY);
+    private void scheduleFrame() {
+        if (frameScheduled.compareAndSet(false, true)) {
+            handler.post(this::postFrameCallback);
+        }
+    }
 
-        while (running) {
-            Canvas glCanvas = null;
-            SurfaceHolder holder = canvas.surfaceHolder;
-            try {
-                signal.acquire();
-                // Merge the wakeups of several frames into one draw
-                signal.drainPermits();
+    private void postFrameCallback() {
+        if (!running) {
+            frameScheduled.set(false);
+            return;
+        }
+        if (choreographer == null) {
+            // Choreographer is per-Looper, so it must be fetched on the worker thread.
+            choreographer = Choreographer.getInstance();
+        }
+        choreographer.postFrameCallback(frameCallback);
+    }
 
-                DrawTask task = pending.getAndSet(null);
-                if (task == null || !running) {
-                    continue;
-                }
+    private final Choreographer.FrameCallback frameCallback = frameTimeNanos -> {
+        if (!running) {
+            return;
+        }
+        DrawTask task = pending.getAndSet(null);
+        if (task == null) {
+            finishFrame();
+            return;
+        }
 
-                if (isShowFps() && task.isCount()) {
+        if (!task.isCount() && lastFrameNanos != 0
+                && frameTimeNanos - lastFrameNanos < MIN_POINTER_FRAME_INTERVAL_NANOS) {
+            pending.compareAndSet(null, task);
+            postNextFrame();
+            return;
+        }
+
+        draw(task);
+        lastFrameNanos = frameTimeNanos;
+
+        if (pending.get() != null) {
+            postNextFrame();
+        } else {
+            finishFrame();
+        }
+    };
+
+    private void postNextFrame() {
+        choreographer.postFrameCallback(frameCallback);
+    }
+
+    /** Releases the "a vsync callback is owed" flag without losing a late task. */
+    private void finishFrame() {
+        frameScheduled.set(false);
+        if (pending.get() != null) {
+            scheduleFrame();
+        }
+    }
+
+    private void draw(DrawTask task) {
+        Canvas glCanvas = null;
+        SurfaceHolder holder = canvas.surfaceHolder;
+        try {
+            if (canvas.fpsCounter != null) {
+                if (task.isCount()) {
                     canvas.fpsCounter.count();
                 }
-
-                // prevent the pointer refresh event goes too fast
-                if (task.getInTimeMs() - lastDraw < 13) {
-                    continue;
-                }
-
-                // when isCount is true, the update comes from a real image update
-                if (System.currentTimeMillis() - task.getInTimeMs() > 16 && task.isCount()) {
-                    // drop frame, lagging
+                // Give the vsync wait some headroom before counting a late frame
+                // as dropped; at 60 Hz a frame can legitimately wait ~17 ms.
+                if (task.isCount() && System.currentTimeMillis() - task.getInTimeMs() > 25) {
                     canvas.fpsCounter.finish(task.getInTimeMs());
                     canvas.fpsCounter.frameDrop();
                 }
+            }
 
-                if (holder == null || canvas.scaler == null || canvas.bitmapData == null) {
-                    continue;
+            if (holder == null || canvas.scaler == null || canvas.bitmapData == null) {
+                return;
+            }
+
+            glCanvas = holder.lockHardwareCanvas();
+            if (glCanvas == null) {
+                return;
+            }
+            glCanvas.setMatrix(canvas.scaler.getMatrix());
+            glCanvas.translate(-canvas.absoluteXPosition, -canvas.absoluteYPosition);
+            glCanvas.drawColor(canvas.surfaceBackgroundColor, PorterDuff.Mode.SRC);
+
+            canvas.bitmapData.drawable.draw(glCanvas);
+
+            if (canvas.fpsCounter != null) {
+                canvas.fpsCounter.finish(task.getInTimeMs());
+                if (showFps) {
+                    canvas.fpsCounter.drawFps(glCanvas);
+                    canvas.fpsCounter.drawDebugMsg(glCanvas, task.getDebugMsg());
                 }
+            }
 
-                glCanvas = holder.lockHardwareCanvas();
-                if (glCanvas == null) {
-                    continue;
-                }
-                glCanvas.setMatrix(canvas.scaler.getMatrix());
-                glCanvas.translate(-canvas.absoluteXPosition, -canvas.absoluteYPosition);
-                glCanvas.drawColor(canvas.surfaceBackgroundColor, PorterDuff.Mode.SRC);
-
-                canvas.bitmapData.drawable.draw(glCanvas);
-
-                if (canvas.fpsCounter != null) {
-                    canvas.fpsCounter.finish(task.getInTimeMs());
-                    if (showFps) {
-                        canvas.fpsCounter.drawFps(glCanvas);
-                        canvas.fpsCounter.drawDebugMsg(glCanvas, task.getDebugMsg());
-                    }
-                }
-
-                lastDraw = System.currentTimeMillis();
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
-            } catch (Exception e) {
-                Log.w(TAG, "draw failed", e);
-            } finally {
-                if (glCanvas != null) {
-                    try {
-                        holder.unlockCanvasAndPost(glCanvas);
-                    } catch (Exception ignored) {
-                    }
+            lastDraw = System.currentTimeMillis();
+        } catch (Exception e) {
+            Log.w(TAG, "draw failed", e);
+        } finally {
+            if (glCanvas != null) {
+                try {
+                    holder.unlockCanvasAndPost(glCanvas);
+                } catch (Exception ignored) {
                 }
             }
         }
