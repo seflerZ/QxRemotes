@@ -2,9 +2,7 @@ package com.undatech.opaque;
 
 import android.app.Activity;
 import android.content.Context;
-import android.graphics.Bitmap;
 import android.os.Handler;
-import android.view.PixelCopy;
 import android.view.SurfaceHolder;
 import android.widget.Toast;
 
@@ -173,26 +171,12 @@ public class NvCommunicator extends RemoteConnectable implements NvConnectionLis
         if (!attemptedConnection) {
             attemptedConnection = true;
             decoderRenderer.setRenderTarget(surfaceHolder);
+            // The codec renders straight into the SurfaceView, so there is nothing to
+            // copy here - just let the canvas know a real frame reached the display.
             decoderRenderer.setGraphicsListener((surface, x, y, width, height) -> {
-                if (viewable == null) {
-                    return;
+                if (viewable != null) {
+                    viewable.onVideoFrameRendered();
                 }
-
-                Bitmap bitmap = viewable.getBitmap();
-                if (bitmap == null) {
-                    return;
-                }
-
-                PixelCopy.request(surface, bitmap, (result) -> {
-                    if (result != PixelCopy.SUCCESS) {
-                        return;
-                    }
-
-                    DrawTask drawTask = new DrawTask(x, y, width, height, true);
-                    drawTask.setDebugMsg(debugMsg);
-
-                    viewable.reDraw(drawTask);
-                }, handler);
             });
 
             Context context = activity.getApplicationContext();
@@ -201,6 +185,31 @@ public class NvCommunicator extends RemoteConnectable implements NvConnectionLis
             // prefConfig.enableAudioFx 本来就是 false。
             conn.start(new AndroidAudioRenderer(context, prefConfig.enableAudioFx),
                     decoderRenderer, NvCommunicator.this);
+        }
+    }
+
+    /** SurfaceView surface (re)created: point the decoder at it. */
+    public void onSurfaceAvailable(SurfaceHolder holder) {
+        if (decoderRenderer != null) {
+            decoderRenderer.setRenderTarget(holder);
+        }
+    }
+
+    /**
+     * Forwards a captured-pointer delta as a true relative mouse move. Absolute
+     * positions keep the host cursor visible; relative motion lets fullscreen
+     * games take raw input and hide it, like Moonlight's game mode.
+     */
+    public void sendRelativeMouseMove(int dx, int dy) {
+        if (conn != null) {
+            conn.sendMouseMove((short) dx, (short) dy);
+        }
+    }
+
+    /** SurfaceView surface destroyed: decode into the offscreen surface meanwhile. */
+    public void onSurfaceDestroyed() {
+        if (decoderRenderer != null) {
+            decoderRenderer.setRenderTarget(null);
         }
     }
 
@@ -232,7 +241,11 @@ public class NvCommunicator extends RemoteConnectable implements NvConnectionLis
     @Override
     public void connectionStarted() {
         // 注意:不在此处关闭进度对话框。connectionStarted 早于首帧解码,此时关框会露出
-        // 一段黑屏。进度框由首帧到达时的 reDraw() 关闭(见 RemoteCanvas.reDraw)。
+        // 一段黑屏。进度框由首帧到达时的 onVideoFrameRendered() 关闭;另加超时兜底,
+        // 防止首帧回调缺失时进度框一直挂着。
+        if (viewable != null) {
+            viewable.scheduleConnectionProgressTimeout();
+        }
     }
 
     @Override

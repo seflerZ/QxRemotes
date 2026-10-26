@@ -316,12 +316,16 @@ public class RemoteCanvas extends SurfaceView implements Viewable
     }
 
     public void startPointerCapture() {
-        requestPointerCapture();
+        // Capture requires the view to hold focus.
         requestFocus();
+        requestPointerCapture();
     }
 
     @Override
     public boolean onCapturedPointerEvent(MotionEvent event) {
+        if (connInitializer != null && connInitializer.onCapturedPointerEvent(event)) {
+            return true;
+        }
         return inputHandler.onPointerEvent(event);
     }
 
@@ -339,6 +343,10 @@ public class RemoteCanvas extends SurfaceView implements Viewable
             }
         }
 
+        if (connInitializer != null) {
+            connInitializer.onSurfaceCreated(holder);
+        }
+
         if (!outDisplay && touchpad) {
             Rect frame = holder.getSurfaceFrame();
             surfaceWidth = frame != null && frame.width() > 0 ? frame.width() : getWidth();
@@ -354,6 +362,9 @@ public class RemoteCanvas extends SurfaceView implements Viewable
 
     @Override
     public void surfaceChanged(@NonNull SurfaceHolder holder, int format, int width, int height) {
+        if (connInitializer != null) {
+            connInitializer.onSurfaceChanged(holder, format, width, height);
+        }
         if (!outDisplay && touchpad) {
             surfaceWidth = width;
             surfaceHeight = height;
@@ -432,6 +443,10 @@ public class RemoteCanvas extends SurfaceView implements Viewable
         idleHandler.removeCallbacks(showIdleClock);
         idleHandler.removeCallbacks(clockTick);
         clockShowing = false;
+
+        if (connInitializer != null) {
+            connInitializer.onSurfaceDestroyed(holder);
+        }
     }
 
     void init(final Connection settings, final Handler handler, final Runnable setModes, final Runnable hideKeyboardAndExtraKeys, final String vvFileName) {
@@ -556,6 +571,11 @@ public class RemoteCanvas extends SurfaceView implements Viewable
         // The factory picks one based on the connection type (and SPICE
         // app flavor). Protocol identity is exposed via the isXxx()
         // accessors below, which delegate to `currentInitializer`.
+        if (connInitializer != null) {
+            // Replacing the strategy (reconnect/reinitialize): let the old one
+            // release listeners and pending state first.
+            connInitializer.onDestroy();
+        }
         connInitializer = ConnectionInitializerFactory.create(conn, getContext());
         if (connInitializer == null) {
             // No strategy for this connection. The non-Opaque entry
@@ -839,6 +859,12 @@ public class RemoteCanvas extends SurfaceView implements Viewable
         }
 
         ProtocolType protocol = getProtocolType();
+        // Direct-rendering protocols paint straight into this SurfaceView; the
+        // bitmap path would otherwise paint a stale copy over the decoded frames.
+        if (usesDirectVideoRendering() && drawWorker != null) {
+            drawWorker.stop();
+            drawWorker = null;
+        }
         boolean isPushlessProtocol = protocol == ProtocolType.RDP
                 || protocol == ProtocolType.NVSTREAM
                 || protocol == ProtocolType.SSH;
@@ -890,6 +916,10 @@ public class RemoteCanvas extends SurfaceView implements Viewable
         try {
             if (needsLocalCursor()) {
                 initializeSoftCursor();
+            }
+
+            if (connInitializer != null) {
+                connInitializer.onDrawableReallocated();
             }
 
             handler.post(setModes);
@@ -1056,6 +1086,11 @@ public class RemoteCanvas extends SurfaceView implements Viewable
      * Method that disconnects from the remote server.
      */
     public void closeConnection() {
+        // Last point where the surface is still alive (thumbnail, etc).
+        if (connInitializer != null) {
+            connInitializer.onBeforeDisconnect();
+        }
+
         maintainConnection = false;
 
         if (keyboard != null) {
@@ -1079,9 +1114,10 @@ public class RemoteCanvas extends SurfaceView implements Viewable
             sshConnection = null;
         }
 
-        if (connection != null) {
-            Log.d(TAG, "Saving screenshot to " + getContext().getFilesDir() + "/" + connection.getScreenshotFilename());
-            Utils.writeScreenshotToFile(bitmapData, getContext().getFilesDir() + "/" + connection.getScreenshotFilename(), 720);
+        if (connection != null && (connInitializer == null || !connInitializer.writesOwnScreenshot())) {
+            String path = getContext().getFilesDir() + "/" + connection.getScreenshotFilename();
+            Log.d(TAG, "Saving screenshot to " + path);
+            Utils.writeScreenshotToFile(bitmapData, path, 720);
         }
 
 //        disposeDrawable();
@@ -1099,6 +1135,9 @@ public class RemoteCanvas extends SurfaceView implements Viewable
         Log.v(TAG, "Cleaning up resources");
 
         removeCallbacksAndMessages();
+        if (connInitializer != null) {
+            connInitializer.onDestroy();
+        }
         if (drawWorker != null) {
             drawWorker.stop();
             drawWorker = null;
@@ -1151,6 +1190,7 @@ public class RemoteCanvas extends SurfaceView implements Viewable
      */
     public boolean movePanToMakePointerVisible() {
         //Log.d(TAG, "movePanToMakePointerVisible");
+        if (usesDirectVideoRendering()) return false;
         if (rfbconn == null)
             return false;
 
@@ -1256,6 +1296,7 @@ public class RemoteCanvas extends SurfaceView implements Viewable
      * @return True if the pan changed the view (did not move view out of bounds); false otherwise
      */
     public boolean relativePan(float dX, float dY) {
+        if (usesDirectVideoRendering()) return false;
         // We only pan if the current scaling is able to pan.
         if (scaler != null && !scaler.isAbleToPan())
             return false;
@@ -1280,6 +1321,7 @@ public class RemoteCanvas extends SurfaceView implements Viewable
     }
 
     public boolean relativePan(float dX, float dY, boolean force) {
+        if (usesDirectVideoRendering()) return false;
         // We only pan if the current scaling is able to pan.
         if (scaler != null && !scaler.isAbleToPan())
             return false;
@@ -1311,6 +1353,7 @@ public class RemoteCanvas extends SurfaceView implements Viewable
      */
     public void absolutePan(int x, int y, boolean force) {
         //android.util.Log.d(TAG, "absolutePan: " + x + ", " + y);
+        if (usesDirectVideoRendering()) return;
 
         if (scaler != null) {
             int vW = getVisibleDesktopWidth();
@@ -1406,6 +1449,11 @@ public class RemoteCanvas extends SurfaceView implements Viewable
     }
 
     public void reDraw(DrawTask drawTask) {
+        // Direct-render protocols paint into the surface themselves; the progress
+        // dialog is closed by the initializer when the first frame arrives.
+        if (usesDirectVideoRendering()) {
+            return;
+        }
         if (progressDialog != null && progressDialog.isShowing()) {
             progressDialog.dismiss();
         }
@@ -1432,12 +1480,39 @@ public class RemoteCanvas extends SurfaceView implements Viewable
         reDraw((int) x, (int) y, (int) w, (int) h);
     }
 
+    public boolean usesDirectVideoRendering() {
+        return connInitializer != null && connInitializer.usesDirectVideoRendering();
+    }
+
+    @Override
+    public void onVideoFrameRendered() {
+        if (fpsCounter != null) {
+            fpsCounter.count();
+        }
+        if (connInitializer != null) {
+            connInitializer.onVideoFrameRendered();
+        }
+    }
+
+    @Override
+    public void scheduleConnectionProgressTimeout() {
+        if (connInitializer != null) {
+            connInitializer.scheduleConnectionProgressTimeout();
+        }
+    }
+
+    /** External-display callers grab the thumbnail before the surface goes away. */
+    public void captureScreenshotBeforeDisconnect() {
+        if (connInitializer != null) {
+            connInitializer.onBeforeDisconnect();
+        }
+    }
+
     /**
      * Invalidates (to redraw) the location of the remote pointer.
      */
     public void invalidateMousePosition() {
-        // NVStream is not using local cursor at present
-        if (bitmapData != null && getProtocolType() != ProtocolType.NVSTREAM) {
+        if (bitmapData != null && !usesDirectVideoRendering()) {
             // add little offset for the cursor image
             bitmapData.moveCursorRect(pointer.getX() - pointer.getHotspotX(), pointer.getY() - pointer.getHotspotY());
             RectF r = bitmapData.getCursorRect();
@@ -1603,6 +1678,12 @@ public class RemoteCanvas extends SurfaceView implements Viewable
     }
 
     public float getMinimumScale() {
+        if (connInitializer != null) {
+            float override = connInitializer.getMinimumScaleOverride();
+            if (override >= 0) {
+                return override;
+            }
+        }
         if (bitmapData != null) {
             return bitmapData.getMinimumScale();
         } else

@@ -36,6 +36,8 @@ class ZoomScaling extends AbstractScaling {
     float scaling;
     float minimumScale;
     private Matrix matrix;
+    /** Set by setScaleTypeForActivity/correctAfterRotation; no-arg methods read it. */
+    private RemoteCanvas activeCanvas;
 
     public ZoomScaling() {
         super(R.id.itemZoomable, ScaleType.MATRIX);
@@ -56,7 +58,11 @@ class ZoomScaling extends AbstractScaling {
      */
     @Override
     public boolean isAbleToPan() {
-        return true;
+        return !usesDirectVideo(activeCanvas);
+    }
+
+    private static boolean usesDirectVideo(RemoteCanvas canvas) {
+        return canvas != null && canvas.usesDirectVideoRendering();
     }
 
     /* (non-Javadoc)
@@ -87,6 +93,7 @@ class ZoomScaling extends AbstractScaling {
      */
     @Override
     void zoomIn(RemoteCanvasActivity activity) {
+        if (usesDirectVideo(activity.getCanvas())) return;
         resetMatrix();
         standardizeScaling();
         scaling += 0.25;
@@ -104,6 +111,11 @@ class ZoomScaling extends AbstractScaling {
      */
     @Override
     public float getZoomFactor() {
+        // Direct-render protocols have no zoom: the view is letterboxed to the
+        // stream aspect, so the fit scale tracks view resizes.
+        if (usesDirectVideo(activeCanvas)) {
+            return activeCanvas.getMinimumScale();
+        }
         return scaling;
     }
 
@@ -117,6 +129,7 @@ class ZoomScaling extends AbstractScaling {
      */
     @Override
     void zoomOut(RemoteCanvasActivity activity) {
+        if (usesDirectVideo(activity.getCanvas())) return;
         resetMatrix();
         standardizeScaling();
         scaling -= 0.25;
@@ -132,6 +145,7 @@ class ZoomScaling extends AbstractScaling {
      */
     @Override
     public void changeZoom(RemoteCanvasActivity activity, float scaleFactor, float fx, float fy) {
+        if (usesDirectVideo(activity.getCanvas())) return;
 
         float oldScale = scaling;
         float newScale = scaleFactor * oldScale;
@@ -187,6 +201,7 @@ class ZoomScaling extends AbstractScaling {
     void setScaleTypeForActivity(RemoteCanvasActivity activity) {
         super.setScaleTypeForActivity(activity);
         RemoteCanvas canvas = activity.getCanvas();
+        activeCanvas = canvas;
         if (canvas == null || canvas.bitmapData == null)
             return;
 
@@ -195,6 +210,15 @@ class ZoomScaling extends AbstractScaling {
         canvasYOffset = 0;
 
         minimumScale = canvas.getMinimumScale();
+
+        if (usesDirectVideo(canvas)) {
+            // Direct-render: the view is letterboxed, so the fit scale is also the
+            // input mapping scale; no zoom/pan.
+            scaling = minimumScale;
+            canvas.absoluteXPosition = 0;
+            canvas.absoluteYPosition = 0;
+            return;
+        }
 
         float lastZoomFactor = canvas.connection.getLastZoomFactor();
         // Do not apply zooming in second display mode.
@@ -211,7 +235,18 @@ class ZoomScaling extends AbstractScaling {
     void correctAfterRotation(RemoteCanvasActivity activity) {
         RemoteCanvas canvas = activity.getCanvas();
 
+        activeCanvas = canvas;
+
         minimumScale = canvas.getMinimumScale();
+
+        if (usesDirectVideo(canvas)) {
+            scaling = minimumScale;
+            canvasXOffset = 0;
+            canvasYOffset = 0;
+            canvas.absoluteXPosition = 0;
+            canvas.absoluteYPosition = 0;
+            return;
+        }
 
         if (scaling < minimumScale) {
             scaling = minimumScale;

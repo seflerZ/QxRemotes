@@ -570,22 +570,26 @@ public class Utils {
 
     static void writeScreenshotToFile(AbstractBitmapData drawable,
                                       String filePath, int dstWidth) {
+        if (drawable != null && drawable.mbitmap != null) {
+            writeScreenshotToFile(drawable.mbitmap, filePath, dstWidth);
+        }
+    }
+
+    public static void writeScreenshotToFile(Bitmap bitmap, String filePath, int dstWidth) {
         try {
-            if (drawable != null && drawable.mbitmap != null) {
+            if (bitmap != null && bitmap.getWidth() > 0) {
                 // TODO: Add Filename to settings.
                 FileOutputStream out = new FileOutputStream(filePath);
-                double scaleReduction = (double) drawable.mbitmap.getWidth() / dstWidth;
-                int dstHeight = (int) ((double) drawable.mbitmap.getHeight() / scaleReduction);
+                double scaleReduction = (double) bitmap.getWidth() / dstWidth;
+                int dstHeight = (int) ((double) bitmap.getHeight() / scaleReduction);
                 Log.d(TAG, "Desktop screenshot width: " + dstWidth + ", height " + dstHeight);
-                Bitmap tmp = Bitmap.createScaledBitmap(drawable.mbitmap, dstWidth, dstHeight, true);
+                Bitmap tmp = Bitmap.createScaledBitmap(bitmap, dstWidth, dstHeight, true);
                 tmp.compress(Bitmap.CompressFormat.PNG, 100, out);
                 out.close();
-//                tmp.recycle();
             }
         } catch (Exception e) {
             e.printStackTrace();
         }
-
     }
 
     /**

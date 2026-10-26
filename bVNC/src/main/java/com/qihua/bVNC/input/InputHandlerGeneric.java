@@ -287,6 +287,10 @@ abstract class InputHandlerGeneric extends MyGestureDectector.SimpleOnGestureLis
         if (canvas.getProtocolType() == ProtocolType.SSH) {
             return (int) e.getY();
         }
+        if (canvas.usesDirectVideoRendering()) {
+            // Letterboxed/centered canvas: event coords are already view-local.
+            return (int) (canvas.getAbsY() + e.getY() / canvas.getZoomFactor());
+        }
         float scale = canvas.getZoomFactor();
         return (int) (canvas.getAbsY() + (e.getY() - 1.f * canvas.getTop()) / scale);
     }

@@ -2,6 +2,8 @@ package com.qihua.bVNC.connection;
 
 import android.content.Context;
 import android.view.Display;
+import android.view.MotionEvent;
+import android.view.SurfaceHolder;
 
 import com.qihua.bVNC.RemoteCanvas;
 import com.undatech.opaque.Connection;
@@ -19,10 +21,10 @@ import com.undatech.opaque.Connection;
  *
  * Adding a 6th protocol = one new class + one factory entry.
  *
- * Per-protocol lifecycle hooks (teardown, surface-recreate, resize) live
- * only on the subclasses that need them; RemoteCanvas type-checks for
- * the concrete initializer when it needs to call one. See §8.17 for the
- * history of why we don't expose them as abstract methods.
+ * Per-protocol lifecycle hooks (surface, teardown, resize, rendering mode)
+ * are default no-ops on this class; only the initializers that need them
+ * override. RemoteCanvas calls them unconditionally instead of type-checking
+ * for a concrete initializer.
  */
 public abstract class ConnectionInitializer {
     /** Which protocol this initializer drives. */
@@ -54,5 +56,60 @@ public abstract class ConnectionInitializer {
      *                        window coordinates
      */
     public void onSoftKeyboardChanged(boolean isShow, int availableHeight) {
+    }
+
+    /**
+     * True when the protocol renders video straight into the SurfaceView
+     * instead of going through the bitmap/DrawWorker path. Disables zoom/pan
+     * and the local cursor repaint, and makes RemoteCanvas expect the
+     * initializer to handle letterboxing itself.
+     */
+    public boolean usesDirectVideoRendering() {
+        return false;
+    }
+
+    // Surface lifecycle. Called for the canvas that owns this initializer.
+    public void onSurfaceCreated(SurfaceHolder holder) {
+    }
+
+    public void onSurfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+    }
+
+    public void onSurfaceDestroyed(SurfaceHolder holder) {
+    }
+
+    /** Called after the bitmap/drawable has been (re)allocated. */
+    public void onDrawableReallocated() {
+    }
+
+    /** >= 0 overrides RemoteCanvas.getMinimumScale(); negative means "no override". */
+    public float getMinimumScaleOverride() {
+        return -1.f;
+    }
+
+    /** Return true if the captured-pointer event was consumed by the protocol. */
+    public boolean onCapturedPointerEvent(MotionEvent event) {
+        return false;
+    }
+
+    /** A frame actually reached the display (direct-render mode). */
+    public void onVideoFrameRendered() {
+    }
+
+    /** Arm a fallback that closes the connection progress dialog. */
+    public void scheduleConnectionProgressTimeout() {
+    }
+
+    /** Before rfbconn closes; the last point where the surface is still alive. */
+    public void onBeforeDisconnect() {
+    }
+
+    /** Teardown; called from RemoteCanvas.onDestroy(). Must be idempotent. */
+    public void onDestroy() {
+    }
+
+    /** True when this initializer writes the connection thumbnail itself. */
+    public boolean writesOwnScreenshot() {
+        return false;
     }
 }

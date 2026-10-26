@@ -1612,7 +1612,13 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
                 + " (pref=" + connection.getInputMode() + ")");
         inputHandler.setup();
         
-        AbstractScaling.getByScaleType(connection.getScaleMode()).setScaleTypeForActivity(this);
+        if (canvas.usesDirectVideoRendering()) {
+            // Direct-render protocols have no zoom/pan: always use the fit scale
+            // so touch coordinates match the letterboxed view.
+            AbstractScaling.getById(R.id.itemZoomable).setScaleTypeForActivity(this);
+        } else {
+            AbstractScaling.getByScaleType(connection.getScaleMode()).setScaleTypeForActivity(this);
+        }
         initializeOnScreenKeys();
         try {
             COLORMODEL cm = COLORMODEL.valueOf(connection.getColorModel());
@@ -2101,6 +2107,9 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
             return true;
         }
         if (itemId == R.id.itemZoomable || itemId == R.id.itemOneToOne || itemId == R.id.itemFitToScreen) {
+            if (canvas.usesDirectVideoRendering()) {
+                return true;
+            }
             AbstractScaling.getById(item.getItemId()).setScaleTypeForActivity(this);
             item.setChecked(true);
             showPanningState(false);
@@ -2625,6 +2634,12 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
     }
 
     public void disconnectAndClose() {
+        // External-display surfaces die with the Presentation, so grab the
+        // thumbnail before dismissing it.
+        if (canvas != null) {
+            canvas.captureScreenshotBeforeDisconnect();
+        }
+
         if (canvasPresentation != null) {
             canvasPresentation.dismiss();
         }

@@ -316,13 +316,17 @@ public class InputHandlerDirectTouch extends InputHandlerGeneric {
             // 从MotionEvent中获取最后已知的坐标
             int pointerIndex = findPointerIndexById(e, pointerId);
             int x, y;
+            // Direct-render canvases are letterboxed/centered, so event
+            // coordinates are already local to the view.
+            float canvasTop = canvas.usesDirectVideoRendering()
+                    ? 0f : 1.f * canvas.getTop();
             if (pointerIndex >= 0) {
                 x = (int) (canvas.getAbsX() + e.getX(pointerIndex) / canvas.getZoomFactor());
-                y = (int) (canvas.getAbsY() + (e.getY(pointerIndex) - 1.f * canvas.getTop()) / canvas.getZoomFactor());
+                y = (int) (canvas.getAbsY() + (e.getY(pointerIndex) - canvasTop) / canvas.getZoomFactor());
             } else {
                 // 如果无法找到特定指针的坐标，使用第一个指针的坐标作为后备
                 x = (int) (canvas.getAbsX() + e.getX(0) / canvas.getZoomFactor());
-                y = (int) (canvas.getAbsY() + (e.getY(0) - 1.f * canvas.getTop()) / canvas.getZoomFactor());
+                y = (int) (canvas.getAbsY() + (e.getY(0) - canvasTop) / canvas.getZoomFactor());
             }
 
             GeneralUtils.debugLog(debugLogging, TAG, "Touch Cancel: x=" + x + ", y=" + y + ", contactId=" + contactId);

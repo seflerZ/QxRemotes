@@ -1,9 +1,21 @@
 package com.qihua.bVNC.connection;
 
 import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.Color;
+import android.graphics.Rect;
+import android.os.Handler;
+import android.os.HandlerThread;
 import android.util.Log;
 import android.view.Display;
+import android.view.Gravity;
+import android.view.MotionEvent;
+import android.view.PixelCopy;
+import android.view.Surface;
 import android.view.SurfaceHolder;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.FrameLayout;
 import android.widget.Toast;
 
 import com.limelight.binding.input.ControllerHandler;
@@ -19,6 +31,9 @@ import com.qihua.bVNC.input.RemoteNvStreamKeyboard;
 import com.qihua.bVNC.input.RemoteNvStreamPointer;
 import com.undatech.opaque.Connection;
 import com.undatech.opaque.NvCommunicator;
+
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 /**
  * NVStream (Sunshine/Moonlight) lifecycle owner. Builds the
@@ -40,6 +55,17 @@ public class NvStreamConnectionInitializer extends ConnectionInitializer {
     private final Connection conn;
     private final Context ctx;
 
+    // Direct-rendering canvas state. The initializer owns the SurfaceView
+    // lifecycle for NVStream: letterbox layout, frame-rate hint, first frame,
+    // thumbnail and relative-mouse forwarding.
+    private volatile RemoteCanvas canvas;
+    private volatile int videoWidth;
+    private volatile int videoHeight;
+    private volatile int streamFps = 60;
+    private volatile boolean firstFrameShown;
+    private volatile Bitmap pendingScreenshot;
+    private View.OnLayoutChangeListener parentLayoutListener;
+
     public NvStreamConnectionInitializer(Connection conn, Context ctx) {
         this.conn = conn;
         this.ctx = ctx;
@@ -59,6 +85,8 @@ public class NvStreamConnectionInitializer extends ConnectionInitializer {
     public void initialize(RemoteCanvas canvas) throws Exception {
         Log.i(TAG, "initialize: Initializing NvStream connection.");
 
+        this.canvas = canvas;
+
         canvas.nvcomm = new NvCommunicator(canvas.activity, canvas, canvas.handler);
         canvas.rfbconn = canvas.nvcomm;
 
@@ -77,7 +105,270 @@ public class NvStreamConnectionInitializer extends ConnectionInitializer {
 
     @Override
     public void onDisplayRectChanged(Display display) {
+        // Rotation / fold / split screen: re-letterbox against the new size.
+        // Called on the UI thread by RemoteCanvasActivity.
+        applyLetterbox();
+    }
 
+    // ---------------------------------------------------------------- hooks
+
+    @Override
+    public boolean usesDirectVideoRendering() {
+        return true;
+    }
+
+    @Override
+    public boolean writesOwnScreenshot() {
+        return true;
+    }
+
+    @Override
+    public void onSurfaceCreated(SurfaceHolder holder) {
+        if (canvas == null) {
+            return;
+        }
+        applyFrameRate(holder);
+        if (canvas.nvcomm != null) {
+            canvas.nvcomm.onSurfaceAvailable(holder);
+        }
+        canvas.post(this::applyLetterbox);
+    }
+
+    @Override
+    public void onSurfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+        onSurfaceCreated(holder);
+    }
+
+    @Override
+    public void onSurfaceDestroyed(SurfaceHolder holder) {
+        if (canvas != null && canvas.nvcomm != null) {
+            // Decode into the offscreen surface until a new one arrives; the
+            // stream itself stays connected.
+            canvas.nvcomm.onSurfaceDestroyed();
+        }
+    }
+
+    @Override
+    public void onDrawableReallocated() {
+        firstFrameShown = false;
+    }
+
+    @Override
+    public float getMinimumScaleOverride() {
+        if (canvas == null || canvas.getWidth() <= 0 || canvas.getHeight() <= 0
+                || videoWidth <= 0 || videoHeight <= 0) {
+            return -1.f;
+        }
+        return Math.min((float) canvas.getWidth() / videoWidth,
+                (float) canvas.getHeight() / videoHeight);
+    }
+
+    @Override
+    public boolean onCapturedPointerEvent(MotionEvent event) {
+        if (canvas == null || canvas.nvcomm == null
+                || event.getActionMasked() != MotionEvent.ACTION_MOVE) {
+            return false;
+        }
+        // Raw deltas let fullscreen games take the mouse and hide the host
+        // cursor; absolute positions keep Windows showing it.
+        int dx = Math.round(event.getX());
+        int dy = Math.round(event.getY());
+        if (dx != 0 || dy != 0) {
+            canvas.nvcomm.sendRelativeMouseMove(dx, dy);
+        }
+        return true;
+    }
+
+    @Override
+    public void onVideoFrameRendered() {
+        if (!firstFrameShown) {
+            firstFrameShown = true;
+            if (canvas != null) {
+                canvas.dismissConnectionProgress();
+            }
+        }
+    }
+
+    @Override
+    public void scheduleConnectionProgressTimeout() {
+        if (canvas == null || canvas.handler == null) {
+            return;
+        }
+        canvas.handler.postDelayed(() -> {
+            if (!firstFrameShown && canvas != null) {
+                canvas.dismissConnectionProgress();
+            }
+        }, 5000);
+    }
+
+    @Override
+    public synchronized void onBeforeDisconnect() {
+        if (canvas == null || !canvas.maintainConnection) {
+            return;
+        }
+        if (pendingScreenshot == null) {
+            pendingScreenshot = captureFrame();
+        }
+    }
+
+    @Override
+    public synchronized void onDestroy() {
+        if (canvas != null && parentLayoutListener != null
+                && canvas.getParent() instanceof ViewGroup) {
+            ((ViewGroup) canvas.getParent()).removeOnLayoutChangeListener(parentLayoutListener);
+        }
+        parentLayoutListener = null;
+
+        Bitmap screenshot = pendingScreenshot;
+        pendingScreenshot = null;
+        if (screenshot != null) {
+            if (canvas != null && canvas.connection != null) {
+                String path = canvas.getContext().getFilesDir() + "/"
+                        + canvas.connection.getScreenshotFilename();
+                Utils.writeScreenshotToFile(screenshot, path, 720);
+            }
+            screenshot.recycle();
+        }
+    }
+
+    // ------------------------------------------------------- implementation
+
+    private void setVideoSize(int width, int height, int fps) {
+        if (canvas == null) {
+            return;
+        }
+        videoWidth = width;
+        videoHeight = height;
+        streamFps = fps > 0 ? fps : 60;
+
+        // start() may run on a worker thread; everything touching views has to
+        // happen on the UI thread.
+        canvas.post(() -> {
+            if (canvas.getParent() instanceof ViewGroup) {
+                ViewGroup parent = (ViewGroup) canvas.getParent();
+                parent.setBackgroundColor(Color.BLACK);
+                if (parentLayoutListener == null) {
+                    parentLayoutListener = (v, left, top, right, bottom,
+                                            oldLeft, oldTop, oldRight, oldBottom) ->
+                            canvas.post(this::applyLetterbox);
+                    parent.addOnLayoutChangeListener(parentLayoutListener);
+                }
+            }
+            applyLetterbox();
+        });
+    }
+
+    /**
+     * Asks SurfaceFlinger to switch the panel to the stream's frame rate. On a
+     * 120 Hz panel, 60 fps content otherwise gets quantised to 2/3 vsyncs per
+     * frame and any release jitter shows up as micro stutter.
+     */
+    private void applyFrameRate(SurfaceHolder holder) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            try {
+                holder.getSurface().setFrameRate(streamFps,
+                        Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
+                        Surface.CHANGE_FRAME_RATE_ALWAYS);
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    /**
+     * Resizes the SurfaceView to the letterbox rect for the stream aspect ratio.
+     * Only the parent's size is used: deriving the stream size from the view
+     * width would feed back into itself.
+     */
+    private void applyLetterbox() {
+        if (canvas == null || videoWidth <= 0 || videoHeight <= 0) {
+            return;
+        }
+        if (!(canvas.getParent() instanceof ViewGroup)) {
+            return;
+        }
+        ViewGroup parent = (ViewGroup) canvas.getParent();
+        int availableWidth = parent.getWidth();
+        int availableHeight = parent.getHeight();
+        if (availableWidth <= 0 || availableHeight <= 0) {
+            return;
+        }
+
+        float scale = Math.min((float) availableWidth / videoWidth,
+                (float) availableHeight / videoHeight);
+        int newWidth = Math.max(1, Math.round(videoWidth * scale));
+        int newHeight = Math.max(1, Math.round(videoHeight * scale));
+
+        ViewGroup.LayoutParams lp = canvas.getLayoutParams();
+        if (lp == null) {
+            lp = new FrameLayout.LayoutParams(newWidth, newHeight, Gravity.CENTER);
+        }
+        if (lp.width == newWidth && lp.height == newHeight) {
+            return;
+        }
+        lp.width = newWidth;
+        lp.height = newHeight;
+        if (lp instanceof FrameLayout.LayoutParams) {
+            ((FrameLayout.LayoutParams) lp).gravity = Gravity.CENTER;
+        }
+        canvas.setLayoutParams(lp);
+    }
+
+    /**
+     * Copies the currently presented SurfaceView frame for the connection
+     * thumbnail. Returns null when the surface is gone or the copy fails.
+     * A timed-out PixelCopy is never recycled - it may still be writing.
+     */
+    private Bitmap captureFrame() {
+        SurfaceHolder holder = canvas != null ? canvas.surfaceHolder : null;
+        if (holder == null) {
+            return null;
+        }
+        Surface surface = holder.getSurface();
+        if (surface == null || !surface.isValid()) {
+            return null;
+        }
+
+        Rect frame = holder.getSurfaceFrame();
+        int width = frame != null && frame.width() > 0 ? frame.width() : canvas.getWidth();
+        int height = frame != null && frame.height() > 0 ? frame.height() : canvas.getHeight();
+        if (width <= 0 || height <= 0) {
+            return null;
+        }
+
+        Bitmap bitmap;
+        try {
+            int targetWidth = Math.min(width, 720);
+            int targetHeight = Math.max(1, Math.round((float) height * targetWidth / width));
+            bitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888);
+        } catch (Throwable t) {
+            return null;
+        }
+
+        HandlerThread thread = new HandlerThread("nv-screenshot");
+        thread.start();
+        CountDownLatch latch = new CountDownLatch(1);
+        final int[] result = {PixelCopy.ERROR_UNKNOWN};
+        try {
+            PixelCopy.request(surface, bitmap,
+                    r -> {
+                        result[0] = r;
+                        latch.countDown();
+                    },
+                    new Handler(thread.getLooper()));
+            if (!latch.await(300, TimeUnit.MILLISECONDS)) {
+                // Timed out: the copy may still be writing, do not recycle.
+                return null;
+            }
+            if (result[0] != PixelCopy.SUCCESS) {
+                bitmap.recycle();
+                return null;
+            }
+            return bitmap;
+        } catch (Throwable t) {
+            return null;
+        } finally {
+            thread.quitSafely();
+        }
     }
 
     private void startWithSurface(RemoteCanvas canvas, SurfaceHolder surfaceHolder) throws Exception {
@@ -114,7 +405,7 @@ public class NvStreamConnectionInitializer extends ConnectionInitializer {
         prefConfig.bitrate = bitrateForResolution(BITRATE_1080P_KBPS, remoteWidth, remoteHeight,
                 prefConfig.fps);
         prefConfig.disableWarnings = true;
-        prefConfig.incomingFrameQueueSize = 2;
+        prefConfig.incomingFrameQueueSize = 3;
         prefConfig.videoFormat = PreferenceConfiguration.FormatOption.AUTO;
         prefConfig.enableLatencyToast = false;
         prefConfig.enablePerfOverlay = Utils.querySharedPreferenceBoolean(canvas.activity, Constants.enableDebugInfo, false);
@@ -134,6 +425,10 @@ public class NvStreamConnectionInitializer extends ConnectionInitializer {
 
         Log.i(TAG, "stream " + remoteWidth + "x" + remoteHeight + " @" + prefConfig.fps
                 + "fps -> bitrate " + prefConfig.bitrate + " kbps");
+
+        // Letterbox the SurfaceView to the stream aspect before the decoder starts;
+        // the codec renders straight into it now (no DrawWorker/PixelCopy).
+        setVideoSize(remoteWidth, remoteHeight, prefConfig.fps);
 
         canvas.nvcomm.setConnectionParameters(computerDetails.activeAddress.address,
                 computerDetails.activeAddress.port,

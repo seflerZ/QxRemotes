@@ -47,4 +47,10 @@ public interface Viewable {
 
     // 关闭连接进度对话框(连接成功或失败/终止时)
     void dismissConnectionProgress();
+
+    // 有一帧真正渲染到了显示 Surface 上(直渲模式用于关闭进度对话框)
+    void onVideoFrameRendered();
+
+    // 首帧迟迟不到时的兜底:超时后关闭进度对话框
+    void scheduleConnectionProgressTimeout();
 }
