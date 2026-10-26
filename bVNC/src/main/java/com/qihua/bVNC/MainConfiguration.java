@@ -380,19 +380,41 @@ public abstract class MainConfiguration extends AppCompatActivity {
     /**
      * Config pages are ScrollViews, but adjustResize stops shifting content
      * on edge-to-edge targets and is ignored in multi-window, leaving the
-     * lower fields under the keyboard. Pad the ScrollView by the IME inset
-     * so everything can scroll clear.
+     * lower fields under the keyboard. Shrink the ScrollView itself by the
+     * IME inset (bottom margin, not padding): padding only adds scrollable
+     * space while the viewport still extends behind the keyboard, so the
+     * page never moves. A margin reduces the viewport, and the focused
+     * field is scrolled into the remaining space.
      */
     private void applyImeInsetsToScrollView() {
         ScrollView scroll = findScrollView(findViewById(android.R.id.content));
         if (scroll == null) return;
-        final int baseBottom = scroll.getPaddingBottom();
+        ViewGroup.LayoutParams lp = scroll.getLayoutParams();
+        if (!(lp instanceof ViewGroup.MarginLayoutParams)) return;
+        final int baseBottomMargin = ((ViewGroup.MarginLayoutParams) lp).bottomMargin;
         ViewCompat.setOnApplyWindowInsetsListener(scroll, (v, insets) -> {
             int ime = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom;
-            v.setPadding(v.getPaddingLeft(), v.getPaddingTop(), v.getPaddingRight(), baseBottom + ime);
+            ViewGroup.MarginLayoutParams params =
+                    (ViewGroup.MarginLayoutParams) v.getLayoutParams();
+            int bottom = baseBottomMargin + ime;
+            if (params.bottomMargin != bottom) {
+                params.bottomMargin = bottom;
+                v.setLayoutParams(params);
+            }
+            View focused = v.findFocus();
+            if (ime > 0 && focused != null && focused != v) {
+                v.post(() -> scrollIntoView((ScrollView) v, focused));
+            }
             return insets;
         });
         ViewCompat.requestApplyInsets(scroll);
+    }
+
+    private static void scrollIntoView(ScrollView scroll, View focused) {
+        android.graphics.Rect rect = new android.graphics.Rect();
+        focused.getDrawingRect(rect);
+        scroll.offsetDescendantRectToMyCoords(focused, rect);
+        scroll.requestChildRectangleOnScreen(focused, rect, true);
     }
 
     private static ScrollView findScrollView(View view) {
