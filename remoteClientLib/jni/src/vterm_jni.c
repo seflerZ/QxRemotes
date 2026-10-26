@@ -1019,6 +1019,88 @@ Java_com_qihua_bVNC_ssh_libvterm_SshTermStateMachine_nativeGetScrollbackCell(
     return got ? marshallTermCell(env, h->vts, &copy) : NULL;
 }
 
+// --- Bulk row fetch (SSH-Paint fast path) ------------------------------
+// The per-cell getters above cross JNI and allocate a TermCell for every
+// cell: a full 80x24 repaint is ~1900 crossings + objects, which dominates
+// scroll and keystroke latency. These fill a caller-provided int[] with
+// CELL_STRIDE ints per cell (codepoint, width, fg, bg, attrs) in one call
+// per row, and allocate nothing on the Java side.
+#define CELL_STRIDE 5
+
+static void fillCellInts(jhandle_t *h, jint *buf, int col,
+                         const VTermScreenCell *cell) {
+    int i = col * CELL_STRIDE;
+    buf[i + 0] = (jint) cell->chars[0];
+    buf[i + 1] = (jint) cell->width;
+    buf[i + 2] = (jint) colorToRgb(h->vts, &cell->fg);
+    buf[i + 3] = (jint) colorToRgb(h->vts, &cell->bg);
+    buf[i + 4] = (jint) packAttrs(&cell->attrs);
+}
+
+JNIEXPORT jint JNICALL
+Java_com_qihua_bVNC_ssh_libvterm_SshTermStateMachine_nativeFillScreenRow(
+        JNIEnv *env, jclass clazz, jlong handle, jint row, jintArray out) {
+    (void) clazz;
+    jhandle_t *h = getHandle(env, handle);
+    if (!h || !out || row < 0 || row >= h->rows) return 0;
+    jsize cap = (*env)->GetArrayLength(env, out);
+    int n = (int) (cap / CELL_STRIDE);
+    if (n > h->cols) n = h->cols;
+    if (n <= 0) return 0;
+    jint *buf = (*env)->GetIntArrayElements(env, out, NULL);
+    if (!buf) return 0;
+    for (int col = 0; col < n; col++) {
+        VTermPos pos = { .row = row, .col = col };
+        VTermScreenCell cell;
+        vterm_screen_get_cell(h->vts, pos, &cell);
+        fillCellInts(h, buf, col, &cell);
+    }
+    (*env)->ReleaseIntArrayElements(env, out, buf, 0);
+    return n;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_qihua_bVNC_ssh_libvterm_SshTermStateMachine_nativeFillScrollbackRow(
+        JNIEnv *env, jclass clazz, jlong handle, jint line, jintArray out) {
+    (void) clazz;
+    jhandle_t *h = getHandle(env, handle);
+    if (!h || !out) return 0;
+    jsize cap = (*env)->GetArrayLength(env, out);
+    int n = (int) (cap / CELL_STRIDE);
+    if (n > h->cols) n = h->cols;
+    if (n <= 0) return 0;
+
+    // Copy under sb_lock, convert colours outside it (colorToRgb can call
+    // back into libvterm, same rule as nativeGetScrollbackCell).
+    VTermScreenCell *tmp = malloc(sizeof(VTermScreenCell) * n);
+    if (!tmp) return 0;
+    int got = 0;
+    pthread_mutex_lock(&h->sb_lock);
+    if (line >= 0 && line < h->sb_count) {
+        int slot = (h->sb_head + line) % h->sb_cap;
+        int src_cols = h->sb_ring[slot].cols;
+        if (h->sb_ring[slot].cells) {
+            got = src_cols < n ? src_cols : n;
+            memcpy(tmp, h->sb_ring[slot].cells,
+                   (size_t) got * sizeof(VTermScreenCell));
+        }
+    }
+    pthread_mutex_unlock(&h->sb_lock);
+
+    if (got > 0) {
+        jint *buf = (*env)->GetIntArrayElements(env, out, NULL);
+        if (buf) {
+            for (int col = 0; col < got; col++)
+                fillCellInts(h, buf, col, &tmp[col]);
+            (*env)->ReleaseIntArrayElements(env, out, buf, 0);
+        } else {
+            got = 0;
+        }
+    }
+    free(tmp);
+    return got;
+}
+
 JNIEXPORT void JNICALL
 Java_com_qihua_bVNC_ssh_libvterm_SshTermStateMachine_nativeDestroy(
         JNIEnv *env, jclass clazz, jlong handle) {

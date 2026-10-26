@@ -72,6 +72,20 @@ public class SshTerminalRenderer {
     private VTermCanvasRenderer canvasRenderer;
     private int currentCols = -1;
     private int currentRows = -1;
+    /** Paint-thread-only state for the scroll fast path (bitmap shift). */
+    private boolean haveLastFrame = false;
+    private boolean fastScrollDirty = true;
+    private int lastOffset = 0;
+    private float lastFrac = 0f;
+    private long lastContentSeq = -1;
+    private boolean lastSelectionActive = false;
+    private int lastRenderCols = -1, lastRenderRows = -1;
+    /** Dirty-row buffer for incremental content paints (paint thread only). */
+    private int[] dirtyRowsBuf = new int[0];
+    private final int[] oneRowBuf = new int[1];
+    private int lastCursorRow = -1;
+    /** Sub-pixel leftover from the integer bitmap shift in the scroll fast path. */
+    private float shiftCarry = 0f;
     private boolean closed;
     /** Set by a real display resize (fold/unfold) to let the grid grow past
      *  the PTY size, which renderInto otherwise rejects as an IME pan. */
@@ -94,6 +108,8 @@ public class SshTerminalRenderer {
     public void seedBackground(DoubleBufferBitmapData target) {
         if (target == null) return;
         target.eraseFront(currentBgColor());
+        haveLastFrame = false;
+        fastScrollDirty = true;
     }
 
     /**
@@ -106,6 +122,8 @@ public class SshTerminalRenderer {
      */
     public void applyTheme() {
         Log.i(TAG, "applyTheme: ctx=" + (ctx != null) + " canvasRenderer=" + (canvasRenderer != null) + " stateMachine=" + (stateMachine != null));
+        // Palette change invalidates the shifted previous frame.
+        fastScrollDirty = true;
         if (canvasRenderer != null) {
             canvasRenderer.setPalette(ctx);
         }
@@ -202,6 +220,10 @@ public class SshTerminalRenderer {
         // Wire libvterm's generated input bytes back to the SSH channel's stdin.
         stateMachine.setOutputStream(channel.getTerminalOut());
         this.updateCallback = onUpdate;
+        haveLastFrame = false;
+        fastScrollDirty = true;
+        lastRenderCols = -1;
+        lastRenderRows = -1;
         startReader(channel, onUpdate);
         channel.start();
         Log.i(TAG, "open: " + cols + " cols x " + rows + " rows, charW="
@@ -287,8 +309,8 @@ public class SshTerminalRenderer {
         }
     }
 
-    public void renderInto(DoubleBufferBitmapData target) {
-        if (closed || target == null) return;
+    public boolean renderInto(DoubleBufferBitmapData target) {
+        if (closed || target == null) return false;
         int w = target.getWidth();
         int h = target.getHeight();
         int pad = paddingPx();
@@ -320,12 +342,117 @@ public class SshTerminalRenderer {
             }
         }
         final int bgColor = currentBgColor();
-        target.paintAndPublish(canvas -> {
-            canvas.drawColor(bgColor);
+
+        SshTermStateMachine.ScrollViewState sv =
+                (stateMachine != null) ? stateMachine.getScrollViewState() : null;
+        long seq = (stateMachine != null) ? stateMachine.getContentSeq() : 0L;
+        boolean selection = canvasRenderer.hasSelection();
+        boolean sizeChanged = cols != lastRenderCols || rows != lastRenderRows;
+        lastRenderCols = cols;
+        lastRenderRows = rows;
+
+        // Fast path: nothing changed except the scroll position (and we are
+        // in history, where the cursor is not drawn and selection is off).
+        // The previous frame is the other buffer, so shift it down/up by the
+        // scroll delta and repaint only the newly exposed band — a full
+        // cell-by-cell glyph repaint costs 50-70 ms on a large grid.
+        int deltaPx = 0;
+        boolean canFast = haveLastFrame && !fastScrollDirty && !sizeChanged
+                && stateMachine != null && sv != null && sv.offset > 0
+                && !selection && !lastSelectionActive
+                && seq == lastContentSeq;
+        if (canFast) {
+            // Carry the rounding remainder: the bitmap shift is integer, but
+            // the scroll position is fractional. Without the carry, each
+            // frame's rounding error accumulates and the frame snaps back by
+            // several pixels when a full repaint finally happens (visible as
+            // a jitter on finger-up).
+            float exact = (sv.offset - lastOffset) * (float) canvasRenderer.charHeight
+                    + (sv.frac - lastFrac);
+            float want = exact + shiftCarry;
+            deltaPx = Math.round(want);
+            shiftCarry = want - deltaPx;
+            canFast = deltaPx != 0 && Math.abs(deltaPx) < h;
+            if (!canFast) shiftCarry = 0f;
+        }
+
+        SshTermStateMachine.CursorInfo cur =
+                (stateMachine != null && sv != null && sv.offset == 0)
+                        ? stateMachine.getCursor() : null;
+        int cursorRow = (cur != null && cur.visible) ? cur.row : -1;
+
+        // Incremental content path: nothing moved except the cells libvterm
+        // reports as damaged (tmux redraws only the lines it changed). Copy
+        // the previous frame, repaint those rows, and skip the ~1700-cell
+        // full repaint that costs 50-70 ms.
+        int dirtyCount = 0;
+        boolean canIncremental = !canFast && haveLastFrame && !fastScrollDirty && !sizeChanged
+                && stateMachine != null && sv != null && sv.offset == 0 && sv.frac == 0f
+                && !selection && !lastSelectionActive
+                && seq != lastContentSeq;
+        if (canIncremental) {
+            if (dirtyRowsBuf.length < rows + 1) dirtyRowsBuf = new int[rows + 1];
+            dirtyCount = stateMachine.takeDirtyRows(dirtyRowsBuf);
+            boolean allDirty = dirtyCount > 0 && dirtyRowsBuf[0] == -1;
+            canIncremental = !allDirty && dirtyCount <= Math.max(1, rows / 2);
+        }
+
+        if (canFast) {
+            final int shift = deltaPx;
+            target.paintAndPublish(canvas -> {
+                canvas.drawBitmap(target.getFront(), 0, shift, null);
+                if (shift > 0) {
+                    canvasRenderer.renderBand(stateMachine, canvas, 0, shift);
+                } else {
+                    canvasRenderer.renderBand(stateMachine, canvas, h + shift, h);
+                }
+            });
+        } else if (canIncremental) {
+            shiftCarry = 0f;
+            final int dn = dirtyCount;
+            final int oldCursorRow = lastCursorRow;
+            final int newCursorRow = cursorRow;
+            target.paintAndPublish(canvas -> {
+                canvas.drawBitmap(target.getFront(), 0, 0, null);
+                if (dn > 0) {
+                    canvasRenderer.renderLiveRows(stateMachine, canvas, dirtyRowsBuf, dn);
+                }
+                // Repaint the row the cursor was on so the old block is
+                // erased, then the cursor is drawn at its new position.
+                if (oldCursorRow >= 0 && oldCursorRow < rows) {
+                    oneRowBuf[0] = oldCursorRow;
+                    canvasRenderer.renderLiveRows(stateMachine, canvas, oneRowBuf, 1);
+                }
+                if (newCursorRow >= 0 && newCursorRow < rows && newCursorRow != oldCursorRow) {
+                    oneRowBuf[0] = newCursorRow;
+                    canvasRenderer.renderLiveRows(stateMachine, canvas, oneRowBuf, 1);
+                }
+                canvasRenderer.paintCursor(stateMachine, canvas, 0);
+            });
+        } else {
+            // Full repaint — drain any damage so the next incremental frame
+            // doesn't replay rows we just painted.
+            shiftCarry = 0f;
             if (stateMachine != null) {
-                canvasRenderer.render(stateMachine, canvas);
+                if (dirtyRowsBuf.length < rows + 1) dirtyRowsBuf = new int[rows + 1];
+                stateMachine.takeDirtyRows(dirtyRowsBuf);
             }
-        });
+            target.paintAndPublish(canvas -> {
+                canvas.drawColor(bgColor);
+                if (stateMachine != null) {
+                    canvasRenderer.render(stateMachine, canvas);
+                }
+            });
+        }
+
+        lastOffset = (sv != null) ? sv.offset : 0;
+        lastFrac = (sv != null) ? sv.frac : 0f;
+        lastContentSeq = seq;
+        lastSelectionActive = selection;
+        lastCursorRow = cursorRow;
+        haveLastFrame = true;
+        fastScrollDirty = false;
+        return canFast;
     }
 
     /**

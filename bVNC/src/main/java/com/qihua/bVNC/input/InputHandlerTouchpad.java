@@ -571,8 +571,34 @@ public class InputHandlerTouchpad extends InputHandlerGeneric {
             }
         }
 
-        if (System.currentTimeMillis() - lastScrollTimeMs < scrollSamplingTimeMs) {
+        // SSH local scrollback is painted locally (no server round-trip), so
+        // the remote-scroll sampling gate only makes the motion choppy. Let
+        // every touch sample through; the paint handler already coalesces.
+        boolean sshLocalScroll = pointer instanceof RemoteSshPointer
+                && ((RemoteSshPointer) pointer).isLocalScrollback();
+
+        if (!sshLocalScroll
+                && System.currentTimeMillis() - lastScrollTimeMs < scrollSamplingTimeMs) {
            return true;
+        }
+
+        // On-screen SSH scrollback follows the finger 1:1. The generic
+        // wheel chain below applies density normalization, a ×3 scale and
+        // speed acceleration (up to 10×) — correct for sending notches to
+        // a remote framebuffer, but it makes the local terminal overshoot.
+        // The external-display touchpad keeps the accelerated mapping.
+        if (sshLocalScroll && !canvas.isOutDisplay()
+                && Math.abs(cumulatedY) >= Math.abs(cumulatedX)) {
+            if (!inScrolling && twoFingers) {
+                inScrolling = true;
+                inSwiping = true;
+            }
+            ((RemoteSshPointer) pointer).scrollLocalByPixels(
+                    (float) (-cumulatedY / canvas.getZoomFactor()));
+            cumulatedX = 0;
+            cumulatedY = 0;
+            lastScrollTimeMs = System.currentTimeMillis();
+            return true;
         }
     
         // 双指 swipe 起判:onScroll 在入口已经过 30ms sampling 门(见上行),

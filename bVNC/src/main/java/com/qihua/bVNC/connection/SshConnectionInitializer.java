@@ -154,6 +154,9 @@ public class SshConnectionInitializer extends ConnectionInitializer {
     /** Off-main paint thread — renderInto blocks 10-30 ms, would flicker UI otherwise. */
     private HandlerThread paintThread;
     private Handler paintHandler;
+    /** One outstanding paint request; prevents scroll storms from starving it. */
+    private final java.util.concurrent.atomic.AtomicBoolean paintScheduled =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
 
     private float density;
     /** Cursor/fb snapshot from last IME push-up — skips redundant repans. */
@@ -649,9 +652,10 @@ public class SshConnectionInitializer extends ConnectionInitializer {
 
     private void ensurePaintThread() {
         if (paintThread != null && paintThread.isAlive()) return;
-        paintThread = new HandlerThread("SSH-Paint");
+        paintThread = new HandlerThread("SSH-Paint", android.os.Process.THREAD_PRIORITY_DISPLAY);
         paintThread.start();
         paintHandler = new Handler(paintThread.getLooper());
+        paintScheduled.set(false);
     }
 
     private void stopPaintThread() {
@@ -668,8 +672,12 @@ public class SshConnectionInitializer extends ConnectionInitializer {
     /** Off-main paint — rapid keystrokes coalesce to the latest state. */
     private void postPaintToBackground() {
         if (paintHandler == null) return;
-        // Drop any pending paint so the latest state is the only one rendered.
-        paintHandler.removeCallbacks(paintRunnable);
+        // Never cancel an already-scheduled paint. The old removeCallbacks +
+        // repost on every request let a fast scroll stream starve the paint
+        // thread down to ~10-20 fps: each new touch event cancelled the
+        // pending frame before the looper could run it. The runnable always
+        // renders the latest state, so one outstanding request is enough.
+        if (!paintScheduled.compareAndSet(false, true)) return;
         long delay = MIN_PAINT_INTERVAL_MS - (System.currentTimeMillis() - lastPaintAt);
         if (delay > 0) {
             paintHandler.postDelayed(paintRunnable, delay);
@@ -686,6 +694,7 @@ public class SshConnectionInitializer extends ConnectionInitializer {
     private final Runnable paintRunnable = new Runnable() {
         @Override
         public void run() {
+            paintScheduled.set(false);
             if (renderer == null) return;
             if (canvas == null) return;
             if (!(canvas.bitmapData instanceof DoubleBufferBitmapData)) return;
@@ -694,12 +703,20 @@ public class SshConnectionInitializer extends ConnectionInitializer {
             SshTermStateMachine sm = renderer.getTermSession();
             if (sm != null && sm.isSyncOutput()
                     && System.currentTimeMillis() - lastPaintAt < SYNC_OUTPUT_MAX_DEFER_MS) {
-                if (paintHandler != null) paintHandler.postDelayed(this, MIN_PAINT_INTERVAL_MS);
+                if (paintHandler != null) {
+                    paintScheduled.set(true);
+                    paintHandler.postDelayed(this, MIN_PAINT_INTERVAL_MS);
+                }
                 return;
             }
             lastPaintAt = System.currentTimeMillis();
             try {
-                renderer.renderInto((DoubleBufferBitmapData) canvas.bitmapData);
+                long t0 = System.nanoTime();
+                boolean fastPath = renderer.renderInto((DoubleBufferBitmapData) canvas.bitmapData);
+                if (App.debugLog) {
+                    long paintMs = (System.nanoTime() - t0) / 1_000_000L;
+                    Log.d(TAG, "paint took " + paintMs + "ms fast=" + fastPath);
+                }
                 // reDraw inside try — a teardown race killing the paint thread freezes the terminal.
                 canvas.reDraw(new DrawTask(0, 0,
                         canvas.rfbconn.framebufferWidth(),

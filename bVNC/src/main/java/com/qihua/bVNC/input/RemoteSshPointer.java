@@ -82,6 +82,30 @@ public class RemoteSshPointer extends RemotePointer {
         this.requestRepaint = requestRepaint;
     }
 
+    /**
+     * True when scrolling drives the local scrollback (the remote app has
+     * not enabled mouse mode). Local scrolling has no server round-trip and
+     * is painted on the SSH-Paint thread, so it should not be throttled to
+     * the remote-scroll sampling rate.
+     */
+    public boolean isLocalScrollback() {
+        return termMachine != null && !termMachine.isMouseModeEnabled();
+    }
+
+    /**
+     * Local scrollback driven directly by finger travel: one view pixel of
+     * swipe moves one bitmap pixel of content. No density rounding, no
+     * wheel encoding, and no speed acceleration — the generic wheel chain
+     * multiplies fast swipes by up to 10x, which makes the terminal
+     * overshoot the finger. The on-screen terminal is drawn 1:1
+     * (SshTerminalScaling uses an identity matrix).
+     */
+    public void scrollLocalByPixels(float delta) {
+        if (termMachine == null || termMachine.isMouseModeEnabled()) return;
+        termMachine.scrollByPixels(delta);
+        if (requestRepaint != null) requestRepaint.run();
+    }
+
     /** Wire the renderer reference for px↔cell conversion. Idempotent. */
     public void setRenderer(SshTerminalRenderer renderer) {
         this.sshRenderer = renderer;

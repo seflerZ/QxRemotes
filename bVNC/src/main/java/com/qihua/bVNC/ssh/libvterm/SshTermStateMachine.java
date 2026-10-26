@@ -57,6 +57,17 @@ public final class SshTermStateMachine {
     private float scrollAccumPx = 0f;
     private volatile int charHeightForScroll = 1;
 
+    /**
+     * Incremented on every {@link #write}. The renderer uses it to tell a
+     * pure viewport scroll (content unchanged) from a real content update,
+     * which enables the fast bitmap-shift scroll path.
+     */
+    private volatile long contentSeq = 0;
+
+    public long getContentSeq() {
+        return contentSeq;
+    }
+
     public SshTermStateMachine(int cols, int rows) {
         if (cols < 1 || rows < 1) {
             throw new IllegalArgumentException("cols/rows must be >= 1, got " + cols + "x" + rows);
@@ -125,6 +136,7 @@ public final class SshTermStateMachine {
         synchronized (this) {
             if (nativeHandle == 0) return;
             nativeWrite(nativeHandle, data, offset, len);
+            contentSeq++;
             // Drain any output libvterm generated in response (e.g. replies to
             // terminal queries) and forward it to the SSH channel's stdin.
             out = nativeDrainOutput(nativeHandle);
@@ -457,6 +469,30 @@ public final class SshTermStateMachine {
         }
     }
 
+    /**
+     * Bulk row fetch for the paint hot path: fills {@code out} with
+     * {@link #CELL_STRIDE} ints per cell — codepoint, width, fg, bg,
+     * attrs — and returns how many cells were written. One JNI crossing
+     * per row instead of one per cell, and no per-cell Java allocation.
+     */
+    public int fillScreenRow(int row, int[] out) {
+        synchronized (this) {
+            if (nativeHandle == 0) return 0;
+            return nativeFillScreenRow(nativeHandle, row, out);
+        }
+    }
+
+    /** Scrollback twin of {@link #fillScreenRow}. */
+    public int fillScrollbackRow(int line, int[] out) {
+        synchronized (this) {
+            if (nativeHandle == 0) return 0;
+            return nativeFillScrollbackRow(nativeHandle, line, out);
+        }
+    }
+
+    /** Ints per cell in the bulk row buffers. Mirrors CELL_STRIDE in vterm_jni.c. */
+    public static final int CELL_STRIDE = 5;
+
     /** Read cursor position + visibility. */
     public CursorInfo getCursor() {
         synchronized (this) {
@@ -557,6 +593,8 @@ public final class SshTermStateMachine {
     private static native TermCell  nativeGetCell(long h, int row, int col);
     private static native int       nativeGetScrollbackCount(long h);
     private static native TermCell  nativeGetScrollbackCell(long h, int line, int col);
+    private static native int       nativeFillScreenRow(long h, int row, int[] out);
+    private static native int       nativeFillScrollbackRow(long h, int line, int[] out);
     private static native CursorInfo nativeGetCursor(long h);
     private static native void  nativeDestroy(long h);
     private static native void  nativeSetDefaultColors(long h, int fgArgb, int bgArgb);

@@ -97,6 +97,12 @@ public final class VTermCanvasRenderer {
      *  thread (paintCell), so no synchronization. */
     private final SparseArray<Float> advCache = new SparseArray<>();
 
+    /** codepoint → 1-char String, so the paint hot path allocates nothing. */
+    private final SparseArray<String> strCache = new SparseArray<>();
+
+    /** Reused per-row cell buffer for the bulk JNI path (one row at a time). */
+    private int[] rowBuf = new int[0];
+
     public VTermCanvasRenderer(int fontSizePx, int paddingPx, Typeface typeface, Context ctx) {
         this.fontSizePx = fontSizePx;
         this.paddingPx = paddingPx;
@@ -272,21 +278,7 @@ public final class VTermCanvasRenderer {
         int saveCount = canvas.save();
         canvas.clipRect(paddingPx, paddingPx,
                 canvas.getWidth() - paddingPx, canvas.getHeight() - paddingPx);
-        int dib = -1;
-        for (int k = kStart; k < rows; k++) {
-            int v = topV + k;
-            float cellTop = paddingPx + k * charHeight + frac;
-            float cellBottom = cellTop + charHeight;
-            float baselineY = cellBottom - textPaint.getFontMetrics().descent;
-            for (int col = 0; col < cols; col++) {
-                SshTermStateMachine.TermCell cell = cellAt(sm, v, sbCount, rows, col);
-                if (cell != null && cell.codepoint == ' '
-                        && (cell.attrs & ATTR_REVERSE) != 0) {
-                    dib = v - sbCount;
-                }
-                paintCell(canvas, cell, col, cellTop, cellBottom, baselineY);
-            }
-        }
+        int dib = paintRows(sm, canvas, topV, sbCount, rows, cols, frac, kStart, rows, -1);
         drawnCursorRow = (offset == 0 && dib >= 0) ? dib : -1;
         // Fill any gaps within the clip rect that the grid didn't cover.
         // The cell loop draws rows × cols cells, but the content area is
@@ -326,66 +318,166 @@ public final class VTermCanvasRenderer {
         // is always defaultFg so it contrasts against any background the
         // remote program can paint (zsh completion menus, reverse video).
         if (offset == 0) {
-            SshTermStateMachine.CursorInfo cur = sm.getCursor();
-            // Honour DEC ?25l: full-screen repaints hide the cursor and
-            // move it around; painting it anyway makes it dance across
-            // the screen.
-            if (cur != null && cur.visible) {
-                int safeCol = Math.max(0, Math.min(cur.col, cols - 1));
-                int safeRow = Math.max(0, Math.min(cur.row, rows - 1));
-                int cursorColor = defaultFg;
-                cursorPaint.setColor(cursorColor);
-                float cx = paddingPx + safeCol * charWidth;
-                float cy = paddingPx + safeRow * charHeight;
-                canvas.drawRect(cx, cy, cx + charWidth, cy + charHeight, cursorPaint);
+            paintCursor(sm, canvas, offset);
+        }
+    }
+
+    /** Paint the block cursor. No-op unless the live view is showing. */
+    public void paintCursor(SshTermStateMachine sm, Canvas canvas, int offset) {
+        if (offset != 0) return;
+        int cols = sm.getCols();
+        int rows = sm.getRows();
+        SshTermStateMachine.CursorInfo cur = sm.getCursor();
+        // Honour DEC ?25l: full-screen repaints hide the cursor and
+        // move it around; painting it anyway makes it dance across
+        // the screen.
+        if (cur != null && cur.visible) {
+            int safeCol = Math.max(0, Math.min(cur.col, cols - 1));
+            int safeRow = Math.max(0, Math.min(cur.row, rows - 1));
+            cursorPaint.setColor(defaultFg);
+            float cx = paddingPx + safeCol * charWidth;
+            float cy = paddingPx + safeRow * charHeight;
+            canvas.drawRect(cx, cy, cx + charWidth, cy + charHeight, cursorPaint);
+        }
+    }
+
+    /** Paint one virtual line {@code k}; returns a reverse-video dummy row or -1. */
+    private int paintRow(SshTermStateMachine sm, Canvas canvas, int k, int topV, int sbCount,
+                         int rows, int cols, float frac, float descent) {
+        int v = topV + k;
+        float cellTop = paddingPx + k * charHeight + frac;
+        float cellBottom = cellTop + charHeight;
+        float baselineY = cellBottom - descent;
+        int dib = -1;
+        // One JNI crossing per row instead of one per cell. `filled` is
+        // short for scrollback lines narrower than the current grid
+        // (after a widen) and for the virtual row above the oldest one.
+        int filled = 0;
+        if (v >= 0) {
+            filled = v < sbCount
+                    ? sm.fillScrollbackRow(v, rowBuf)
+                    : (v - sbCount < rows ? sm.fillScreenRow(v - sbCount, rowBuf) : 0);
+        }
+        for (int col = 0; col < cols; col++) {
+            if (col >= filled) {
+                paintEmptyCell(canvas, col, cellTop, cellBottom);
+                continue;
             }
+            int i = col * SshTermStateMachine.CELL_STRIDE;
+            int cp = rowBuf[i];
+            int attrs = rowBuf[i + 4];
+            if (cp == ' ' && (attrs & ATTR_REVERSE) != 0) {
+                dib = v - sbCount;
+            }
+            paintCell(canvas, cp, rowBuf[i + 1], rowBuf[i + 2], rowBuf[i + 3],
+                    attrs, col, cellTop, cellBottom, baselineY);
         }
+        return dib;
     }
 
     /**
-     * Map a virtual line index {@code v} to a cell: scrollback line v
-     * when {@code v < sbCount}, live grid row {@code (v - sbCount)}
-     * otherwise. Returns null for out-of-range (paintCell draws nothing
-     * for null — in practice cellAt always returns a cell because the
-     * render loop's v range stays within [0, sbCount+rows)).
+     * Repaint only the given live grid rows (the dirty rows reported by
+     * libvterm). The caller has already copied the previous frame into the
+     * target, so untouched rows keep their pixels. Live view only.
      */
-    private SshTermStateMachine.TermCell cellAt(SshTermStateMachine sm,
-                                                int v, int sbCount, int rows, int col) {
-        if (v < 0) return null;
-        if (v < sbCount) return sm.getScrollbackCell(v, col);
-        int liveRow = v - sbCount;
-        if (liveRow >= rows) return null;
-        return sm.getCell(liveRow, col);
+    public int renderLiveRows(SshTermStateMachine sm, Canvas canvas, int[] dirty, int n) {
+        SshTermStateMachine.ScrollViewState sv = sm.getScrollViewState();
+        int sbCount = sv.sbCount;
+        int cols = sm.getCols();
+        int rows = sm.getRows();
+        int need = cols * SshTermStateMachine.CELL_STRIDE;
+        if (rowBuf.length < need) rowBuf = new int[need];
+        final float descent = textPaint.getFontMetrics().descent;
+        int dib = -1;
+        for (int i = 0; i < n; i++) {
+            int row = dirty[i];
+            if (row < 0 || row >= rows) continue;
+            int d = paintRow(sm, canvas, row, sbCount, sbCount, rows, cols, 0f, descent);
+            if (d >= 0) dib = d;
+        }
+        return dib;
     }
 
     /**
-     * Paint one cell: bg fill + glyph + underline. Used by
-     * {@link #render}. The cell's column within the row is {@code col};
-     * its glyph's left edge is {@code paddingPx + col * charWidth}.
-     * Returns early on null (out-of-range row/col) and on gap cells
-     * (codepoint == -1 = second column of a double-width CJK char).
+     * Paint rows [kFrom, kTo) of the virtual viewport. One bulk JNI call
+     * per row; returns the reverse-video dummy row (or the dib passed in).
      */
-    private void paintCell(Canvas canvas, SshTermStateMachine.TermCell cell,
-                           int col, float cellTop, float cellBottom, float baselineY) {
+    private int paintRows(SshTermStateMachine sm, Canvas canvas, int topV, int sbCount,
+                          int rows, int cols, float frac, int kFrom, int kTo, int dib) {
+        int need = cols * SshTermStateMachine.CELL_STRIDE;
+        if (rowBuf.length < need) rowBuf = new int[need];
+        final float descent = textPaint.getFontMetrics().descent;
+        for (int k = kFrom; k < kTo; k++) {
+            int d = paintRow(sm, canvas, k, topV, sbCount, rows, cols, frac, descent);
+            if (d >= 0) dib = d;
+        }
+        return dib;
+    }
+
+    /**
+     * Repaint only the grid rows intersecting the pixel band
+     * [yTop, yBottom). Used by the scroll fast path: the previous frame is
+     * shifted by the scroll delta into the back buffer, so only the band
+     * uncovered at the top (scrolling into history) or bottom (scrolling
+     * back toward live) needs glyphs.
+     */
+    public void renderBand(SshTermStateMachine sm, Canvas canvas, float yTop, float yBottom) {
+        SshTermStateMachine.ScrollViewState sv = sm.getScrollViewState();
+        int offset = sv.offset;
+        float frac = sv.frac;
+        int sbCount = sv.sbCount;
+        if (offset >= sbCount) {
+            offset = sbCount;
+            frac = 0f;
+        }
+        int cols = sm.getCols();
+        int rows = sm.getRows();
+        int topV = sbCount - offset;
+        // One row of margin: band edges are pixels, rows are charHeight tall.
+        int kFrom = (int) Math.floor((yTop - paddingPx - frac) / charHeight) - 1;
+        int kTo = (int) Math.ceil((yBottom - paddingPx - frac) / charHeight) + 1;
+        if (kFrom < (frac > 0f ? -1 : 0)) kFrom = (frac > 0f ? -1 : 0);
+        if (kTo > rows) kTo = rows;
+        if (kFrom >= kTo) return;
+        int save = canvas.save();
+        canvas.clipRect(paddingPx, paddingPx,
+                canvas.getWidth() - paddingPx, canvas.getHeight() - paddingPx);
+        paintRows(sm, canvas, topV, sbCount, rows, cols, frac, kFrom, kTo, -1);
+        canvas.restoreToCount(save);
+    }
+
+    /**
+     * Fill one cell with the default background. Used for cells the bulk
+     * native row fetch did not cover (scrollback line narrower than the
+     * current grid, or the extra virtual row above the oldest line) so no
+     * stale pixels leak through from a previous frame.
+     */
+    private void paintEmptyCell(Canvas canvas, int col,
+                                float cellTop, float cellBottom) {
         float cellLeft = paddingPx + col * charWidth;
-        if (cell == null) {
-            // Out-of-range — e.g. a scrollback line narrower than the current
-            // cols after a widen (nativeGetScrollbackCell returns null for col
-            // >= the line's stored width). Fill default bg so no stale pixels
-            // from a concurrent DrawWorker read leak through the uncovered cell
-            // (the per-cell-bg invariant that keeps the SSH canvas flicker-free).
-            bgPaint.setColor(bgColor);
-            canvas.drawRect(cellLeft, cellTop, cellLeft + charWidth, cellBottom, bgPaint);
-            return;
-        }
+        bgPaint.setColor(bgColor);
+        canvas.drawRect(cellLeft, cellTop, cellLeft + charWidth, cellBottom, bgPaint);
+    }
+
+    /**
+     * Paint one cell from the packed values of a bulk row fetch: bg fill +
+     * glyph + underline. The cell's column within the row is {@code col};
+     * its glyph's left edge is {@code paddingPx + col * charWidth}.
+     * Returns early on gap cells (codepoint == -1 = second column of a
+     * double-width CJK char).
+     */
+    private void paintCell(Canvas canvas, int codepoint, int width, int fg, int bg,
+                           int attrs, int col, float cellTop, float cellBottom,
+                           float baselineY) {
+        float cellLeft = paddingPx + col * charWidth;
         // Gap cell: second column of a double-width CJK char
         // (libvterm marks it chars[0]==0xFFFFFFFF, which becomes
         // jint -1). Its area is already covered by the primary
         // cell's bg fill + wide glyph; skip it so we don't
         // overdraw the wide glyph's right half.
-        if (cell.codepoint == -1) return;
+        if (codepoint == -1) return;
 
-        float cellRight = cellLeft + charWidth * Math.max(1, cell.width);
+        float cellRight = cellLeft + charWidth * Math.max(1, width);
 
         // Translate raw-RGB cells whose colour happens to match
         // the *original* (Solarized) default into "this is a default-
@@ -393,15 +485,15 @@ public final class VTermCanvasRenderer {
         // maps them onto the current theme's defaultFg/defaultBg
         // without us having to teach libvterm 0.3.3 about theme
         // flips.
-        int cellFg = (cell.fg == defaultFg || cell.fg == LEGACY_DEFAULT_FG)
-                ? defaultFg : cell.fg;
-        int cellBg = (cell.bg == defaultBg || cell.bg == LEGACY_DEFAULT_BG)
-                ? defaultBg : cell.bg;
+        int cellFg = (fg == defaultFg || fg == LEGACY_DEFAULT_FG)
+                ? defaultFg : fg;
+        int cellBg = (bg == defaultBg || bg == LEGACY_DEFAULT_BG)
+                ? defaultBg : bg;
 
         // Always fill bg — clears stale content from the previous
         // frame without a global clear.
         int bgFill;
-        if ((cell.attrs & ATTR_REVERSE) != 0) {
+        if ((attrs & ATTR_REVERSE) != 0) {
             // reverse video: swap fg/bg
             bgFill = (cellFg == defaultFg) ? defaultFg : cellFg;
         } else if (cellBg != defaultBg) {
@@ -413,17 +505,17 @@ public final class VTermCanvasRenderer {
         canvas.drawRect(cellLeft, cellTop, cellRight, cellBottom, bgPaint);
 
         // Glyph
-        if (cell.codepoint > 0) {
-            int fgColor = (cell.attrs & ATTR_REVERSE) != 0
+        if (codepoint > 0) {
+            int fgColor = (attrs & ATTR_REVERSE) != 0
                     ? (cellBg == defaultBg ? defaultFg : cellBg)
                     : (cellFg == defaultFg ? defaultFg : cellFg);
             textPaint.setColor(fgColor);
-            textPaint.setFakeBoldText((cell.attrs & ATTR_BOLD) != 0);
-            textPaint.setTextSkewX((cell.attrs & ATTR_ITALIC) != 0 ? -0.25f : 0f);
+            textPaint.setFakeBoldText((attrs & ATTR_BOLD) != 0);
+            textPaint.setTextSkewX((attrs & ATTR_ITALIC) != 0 ? -0.25f : 0f);
             // Char-to-glyph: TextPaint.drawText takes a String, codepoint
-            // may be surrogate-pair. Build a 1-char string.
-            String str = new String(Character.toChars(cell.codepoint));
-            if (isEmojiCodepoint(cell.codepoint)) {
+            // may be surrogate-pair. Cached: this runs per cell per frame.
+            String str = cellString(codepoint);
+            if (isEmojiCodepoint(codepoint)) {
                 // Treat emoji as 2-cell wide regardless of what the emoji
                 // font's own advance says — CJK in this renderer uses the
                 // same 2 × charWidth rule, see v68 CJK scale logic.
@@ -460,9 +552,9 @@ public final class VTermCanvasRenderer {
                 // horizontally into the allotted box rather than widening
                 // the cell: the remote laid the line out with wcwidth()==1,
                 // so eating 2 columns here would drift the whole row.
-                float scaleX = fitScaleX(cell.codepoint, str, Math.max(1, cell.width));
+                float scaleX = fitScaleX(codepoint, str, Math.max(1, width));
                 if (scaleX < 1f) textPaint.setTextScaleX(scaleX);
-                if ((cell.attrs & ATTR_ITALIC) != 0) {
+                if ((attrs & ATTR_ITALIC) != 0) {
                     // Italic (-0.25 skewX about baseline) shifts the glyph's
                     // glyph-top rightward by tan(0.25)*ascent (~0.25 * em).
                     // textPaint.measureText does NOT include that rightward
@@ -484,11 +576,20 @@ public final class VTermCanvasRenderer {
         }
 
         // Underline
-        if ((cell.attrs & ATTR_UNDERLINE) != 0 && cell.codepoint > 0) {
+        if ((attrs & ATTR_UNDERLINE) != 0 && codepoint > 0) {
             underlinePaint.setColor(textPaint.getColor());
             float underlineY = cellBottom - Math.max(1f, fontSizePx / 14f);
             canvas.drawLine(cellLeft, underlineY, cellRight, underlineY, underlinePaint);
         }
+    }
+
+    private String cellString(int cp) {
+        String s = strCache.get(cp);
+        if (s == null) {
+            s = new String(Character.toChars(cp));
+            strCache.put(cp, s);
+        }
+        return s;
     }
 
     /**

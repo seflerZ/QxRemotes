@@ -1605,6 +1605,11 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
     void setModes() {
         Log.d(TAG, "setModes");
         inputHandler = getInputHandlerByName(connection.getInputMode());
+        Log.i(TAG, "input handler = " + (inputHandler != null ? inputHandler.getId() : "null")
+                + " class=" + (inputHandler != null ? inputHandler.getClass().getSimpleName() : "-")
+                + " canvasPtr=" + (canvas.getPointer() == null ? "null"
+                        : canvas.getPointer().getClass().getSimpleName())
+                + " (pref=" + connection.getInputMode() + ")");
         inputHandler.setup();
         
         AbstractScaling.getByScaleType(connection.getScaleMode()).setScaleTypeForActivity(this);
@@ -2292,7 +2297,13 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
                 }
             }
 
-            if (event.getAction() == MotionEvent.ACTION_UP) {
+            // Also clear on CANCEL: a gesture that ends without an UP (extra-key
+            // view takes over, a system gesture interrupts, keyboard shows…)
+            // used to leave the flag stuck true, silently dropping every later
+            // touch. Must run at the end, not the top: an extra-key gesture's
+            // UP must still be withheld from the input handler.
+            if (event.getAction() == MotionEvent.ACTION_UP
+                    || event.getAction() == MotionEvent.ACTION_CANCEL) {
                 nonTouchDown = false;
             }
         } catch (Exception ignore) {
