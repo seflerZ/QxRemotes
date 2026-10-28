@@ -254,6 +254,7 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
     private CustomKeyboardView customKeyboardView;
     private boolean customKeyboardEnabled;
     private boolean customKeyboardFloating;
+    private boolean disableImeWithHwKeyboard;
 
     /**
      * Helper method to get Display object based on Android version and context type
@@ -340,6 +341,7 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
 
         getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,
                 WindowManager.LayoutParams.FLAG_FULLSCREEN);
+
 
         Utils.showMenu(this);
 
@@ -661,6 +663,10 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
         }
 
         recreateExtraKeys(useLandscapeExtraKeys());
+
+        disableImeWithHwKeyboard = Utils.querySharedPreferenceBoolean(
+                this, Constants.disableImeWithHwKeyboard, true);
+        applySoftInputMode();
 
         // the progress dialog can not be displayed in external monitor, so accept it from the touchpad
         canvas.setProgressDialog(touchpad.getProgressDialog());
@@ -1587,6 +1593,10 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
     protected void onResume() {
         super.onResume();
 
+        disableImeWithHwKeyboard = Utils.querySharedPreferenceBoolean(
+                this, Constants.disableImeWithHwKeyboard, true);
+        applySoftInputMode();
+
         // Start back tap keyboard helper if enabled
         SharedPreferences prefs = getSharedPreferences(Constants.generalSettingsTag, Context.MODE_PRIVATE);
         if (prefs.getBoolean(Constants.backTapShowKeyboard, false)) {
@@ -1740,6 +1750,7 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
     @Override
     public void onConfigurationChanged(@NonNull Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
+        applySoftInputMode();
         enableImmersive();
 
         try {
@@ -2483,6 +2494,32 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
                 repanCanvas4SSH(true);
             }
         }, CURSOR_SETTLE_MS + 20);
+    }
+
+    /** The framework flags an attached physical keyboard through Configuration. */
+    private boolean hasPhysicalKeyboard() {
+        Configuration cfg = getResources().getConfiguration();
+        return cfg.hardKeyboardHidden != Configuration.HARDKEYBOARDHIDDEN_YES
+                && cfg.keyboard != Configuration.KEYBOARD_NOKEYS;
+    }
+
+    /**
+     * Our canvas reports itself as a text editor, so the framework raises the
+     * IME on focus and on hardware key presses. stateAlwaysHidden blocks that
+     * automatic path only — an explicit showSoftInput (keyboard button, edge
+     * gesture) still works.
+     */
+    private void applySoftInputMode() {
+        boolean suppress = disableImeWithHwKeyboard && hasPhysicalKeyboard();
+        int mode = getWindow().getAttributes().softInputMode
+                & ~WindowManager.LayoutParams.SOFT_INPUT_MASK_STATE;
+        mode |= suppress
+                ? WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN
+                : WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN;
+        getWindow().setSoftInputMode(mode);
+        if (suppress && softKeyboardUp && !customKeyboardEnabled) {
+            hideKeyboard();
+        }
     }
 
     public void showKeyboard() {

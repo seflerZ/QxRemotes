@@ -880,6 +880,8 @@ aSPICE对应的功能如下：
     <string name="back_tap_show_keyboard_hint">双击手机背部或者轻晃唤出软键盘</string>
     <string name="custom_keyboard_enabled">使用自带键盘</string>
     <string name="custom_keyboard_enabled_hint">自绘键盘替代系统输入法，仅发送按键;宽屏自动分裂，可上下拖动位置，再长按拖动可以切换</string>
+    <string name="disable_ime_with_hw_keyboard">外接键盘时禁用输入法</string>
+    <string name="disable_ime_with_hw_keyboard_hint">检测到外接键盘后，系统输入法不再自动弹出；仍可用键盘按钮或边缘手势手动呼出</string>
 
     <string name="extrakeys_pref">软键盘配置</string>
     <string name="pref_extrakeys_vertical_pref">竖屏时显示内容</string>

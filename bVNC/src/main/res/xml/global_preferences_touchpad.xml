@@ -60,5 +60,11 @@
             app:defaultValue="false"
             android:title="@string/custom_keyboard_enabled"
             android:summary="@string/custom_keyboard_enabled_hint"/>
+        <SwitchPreferenceCompat
+            android:defaultValue="true"
+            android:key="disableImeWithHwKeyboard"
+            app:defaultValue="true"
+            android:title="@string/disable_ime_with_hw_keyboard"
+            android:summary="@string/disable_ime_with_hw_keyboard_hint"/>
     </PreferenceCategory>
 </PreferenceScreen>
