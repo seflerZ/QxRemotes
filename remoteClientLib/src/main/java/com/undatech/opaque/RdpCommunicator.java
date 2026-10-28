@@ -2,6 +2,7 @@ package com.undatech.opaque;
 
 import android.content.Context;
 import android.graphics.Bitmap;
+import android.graphics.Rect;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
@@ -54,6 +55,16 @@ public class RdpCommunicator extends RemoteConnectable implements RdpKeyboardMap
     private boolean reattemptWithoutCredentials = false;
     private boolean authenticationAttempted = false;
     private boolean disconnectRequested = false;
+
+    // 双缓冲的 back 里是"两帧前"的内容:每次发布前只需把上次发布以来累积的
+    // 脏区从 native primary 拷过去,不必整帧 14.7MB 拷贝(打字/终端场景能省一个
+    // 数量级)。两块 Bitmap 初始都是空白,所以前两次发布必须全量。
+    private static final int FULL_SYNC_FRAMES = 2;
+    private final Rect pendingDirty = new Rect();
+    private final Rect lastSyncDirty = new Rect();
+    private final Rect copyRect = new Rect();
+    private int syncedFrames;
+    private boolean needsFullSync = true;
 
     private String username, password, domain;
 
@@ -501,6 +512,11 @@ public class RdpCommunicator extends RemoteConnectable implements RdpKeyboardMap
     @Override
     public void OnSettingsChanged(int width, int height, int bpp) {
         android.util.Log.d(TAG, "OnSettingsChanged called, wxh: " + width + "x" + height);
+        // 新分配的 Bitmap 是空白的,旧的脏区历史全部作废
+        lastSyncDirty.setEmpty();
+        pendingDirty.setEmpty();
+        syncedFrames = 0;
+        needsFullSync = true;
         viewable.reallocateDrawable(width, height);
     }
 
@@ -577,26 +593,70 @@ public class RdpCommunicator extends RemoteConnectable implements RdpKeyboardMap
         if (viewable == null || session == null) {
             return;
         }
+        if (width <= 0 || height <= 0) {
+            return;
+        }
+
+        // 先累积:即使这次因为 bitmap 不可用跳过,脏区也不能丢
+        unionDirty(x, y, width, height);
 
         // 写 back buffer(不是正在显示的那块),画完再发布。
         Bitmap bitmap = viewable.getWriteBitmap();
         if (bitmap == null) {
+            // 不知道 back 现在是什么内容,下次从头全量同步
+            needsFullSync = true;
             return;
         }
 
         // 锁这块 bitmap:绘制线程画同一块时也持锁,两边不会同时碰同一块像素
         // (以前是绘制线程优先级更高,解码线程被压住 → 帧延迟/撕裂)。
         synchronized (bitmap) {
+            final int bw = bitmap.getWidth();
+            final int bh = bitmap.getHeight();
+            final Rect copy = copyRect;
+
+            boolean full = needsFullSync || syncedFrames < FULL_SYNC_FRAMES;
+            if (!full) {
+                // back 是两帧前的内容:补上上次发布以来累积的脏区即可
+                copy.set(lastSyncDirty);
+                copy.union(pendingDirty);
+                copy.intersect(0, 0, bw, bh);
+                // 并集逼近全屏时直接整帧拷贝(连续的整块 memcpy 更快)
+                if (copy.isEmpty()
+                        || (long) copy.width() * copy.height() * 2 >= (long) bw * bh) {
+                    full = true;
+                }
+            }
+            if (full) {
+                copy.set(0, 0, bw, bh);
+            }
+
+            boolean ok = LibFreeRDP.updateGraphics(session.getInstance(), bitmap,
+                    copy.left, copy.top, copy.width(), copy.height());
+            if (!ok) {
+                // 只写了一半的 back 不能发布,下次从头全量同步
+                needsFullSync = true;
+                return;
+            }
+
+            // 发布成功之后才推进历史:新 back 是这一轮的 front(上一帧),
+            // 它下次要补的正是"上次发布以来累积的脏区"。
+            lastSyncDirty.set(pendingDirty);
+            pendingDirty.setEmpty();
+            needsFullSync = false;
+            syncedFrames++;
+
             DrawTask drawTask = new DrawTask(x, y, width, height, true);
-
-            LibFreeRDP.updateGraphics(session.getInstance(), bitmap
-                    , 0
-                    , 0
-                    , bitmap.getWidth()
-                    , bitmap.getHeight());
-
             viewable.publishFrame();
             viewable.reDraw(drawTask);
+        }
+    }
+
+    private void unionDirty(int x, int y, int width, int height) {
+        if (pendingDirty.isEmpty()) {
+            pendingDirty.set(x, y, x + width, y + height);
+        } else {
+            pendingDirty.union(x, y, x + width, y + height);
         }
     }
 
