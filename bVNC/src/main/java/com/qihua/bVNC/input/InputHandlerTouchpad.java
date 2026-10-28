@@ -82,6 +82,10 @@ public class InputHandlerTouchpad extends InputHandlerGeneric {
     // 每次事件都会写 lastScrollTimeMs,同一事件流里紧接着调 updateActiveEdgeSlider 时
     // 时间差恒为 ~0,复用会让滑条永远被跳过。用独立时间戳与 SCROLL_SAMPLING_MS 对齐。
     private long lastEdgeUpdateMs = 0;
+    // 拖拽(按住按钮移动)每来一个 ACTION_MOVE 就发一次指针包,触摸屏 120~240Hz,
+    // 服务端只有 60fps 出图 —— 多余的包只会让输入处理和编码互相抢。和普通光标
+    // 移动一样按 POINTER_SAMPLING_MS 限频。
+    private long lastDragMoveSentMs = 0;
     // inertia scrolling state lives in InertiaScroller (owned by the
     // base class); this class just opts in via enableInertiaScrolling(...)
     // and drives the sampling API exposed through InputHandlerGeneric.
@@ -206,6 +210,7 @@ public class InputHandlerTouchpad extends InputHandlerGeneric {
                         // 避免用上次手势的旧时刻算出巨大 dt。
                         resetInertiaSampling();
                         stopInertia();
+                        lastDragMoveSentMs = 0;
 
                         lastX = e.getX();
                         lastY = e.getY();
@@ -243,27 +248,31 @@ public class InputHandlerTouchpad extends InputHandlerGeneric {
                             }
 
                             // when reached to the edge, keep the cursor continue moving
-                            int x = getDragPointerX(e);
-                            int y = getDragPointerY(e);
+                            long dragNow = System.currentTimeMillis();
+                            if (dragNow - lastDragMoveSentMs >= POINTER_SAMPLING_MS) {
+                                int x = getDragPointerX(e);
+                                int y = getDragPointerY(e);
 
-                            if (System.currentTimeMillis() - lastDragHelpTimeMs > 200) {
-                                if (e.getX() >= touchpad.getWidth() - getImmersiveXDistance()) {
-                                    x += 50;
-                                } else if (e.getX() <= getImmersiveXDistance()) {
-                                    x -= 50;
+                                if (dragNow - lastDragHelpTimeMs > 200) {
+                                    if (e.getX() >= touchpad.getWidth() - getImmersiveXDistance()) {
+                                        x += 50;
+                                    } else if (e.getX() <= getImmersiveXDistance()) {
+                                        x -= 50;
+                                    }
+
+                                    if (e.getY() >= touchpad.getHeight() - getImmersiveYDistance()) {
+                                        y += 50;
+                                    } else if (e.getY() <= getImmersiveYDistance()) {
+                                        y -= 50;
+                                    }
+
+                                    lastDragHelpTimeMs = dragNow;
                                 }
 
-                                if (e.getY() >= touchpad.getHeight() - getImmersiveYDistance()) {
-                                    y += 50;
-                                } else if (e.getY() <= getImmersiveYDistance()) {
-                                    y -= 50;
-                                }
-
-                                lastDragHelpTimeMs = System.currentTimeMillis();
+                                pointer.moveMouseButtonDown(x, y, meta);
+                                canvas.movePanToMakePointerVisible();
+                                lastDragMoveSentMs = dragNow;
                             }
-
-                            pointer.moveMouseButtonDown(x, y, meta);
-                            canvas.movePanToMakePointerVisible();
                         }
 
                         // Update edge slider during swipe (SSH: never shown, defensive check).
@@ -385,32 +394,9 @@ public class InputHandlerTouchpad extends InputHandlerGeneric {
 
             // for two finger inertia scrolling
             if (isInertiaEnabled() && inSwiping) {
-                // ============================================================
-                // 低帧率协议 (RDP / VNC) 上的 scroll inertia 显式禁用
-                // ============================================================
-                // 背景:doScroll 对边缘 / 双指滚动做了两层降频处理——
-                //   1. delta 系数减半 (distanceY * density / 4,原 /2)
-                //   2. RDP 路径计划用 RdpScrollCoalescer 32ms 窗合包 (FLUSH_MS=32)
-                // 这两层处理后每包 delta 翻倍,RDP 服务器侧 wheel 累加更稳定
-                // (参见相关 RdpScrollCoalescer 调研历史)。但在松手阶段,
-                // inertia 路径再走 doScroll 时,中间只有几个 tick,
-                // 这些 tick 各被合 1~2 个 30Hz 窗口,服务器可能收不到或
-                // 被新一轮手势覆盖,体感是"手指在快、松手后慢"。
-                //
-                // 与 NVStream/SPICE/SSH 的差异:NVStream 内部 batch
-                // 路径天然无此问题,所以不需要在这里 bypass。
-                //
-                // 副作用说明:这里的 return-true 只阻止 scroll inertia
-                // 释放,不影响 doScroll 本体,也不影响单指 pointer inertia
-                // (pointer inertia 走 inertiaThread 的 else 分支
-                // → pointer.moveMouse,跟此处分支无关)。
-                //
-                // 未来如果加了新的 RFB 派生指针类型 (如 RemoteSpiceRfbPointer),
-                // 想继承同样的处理就把它的 instanceof 加进下面这个或判断里。
-                // ============================================================
-                if (isLowFrameRateScrollProtocol()) {
-                    return true;
-                }
+                // RDP/VNC 以前在这里被显式跳过:60ms 采样门会把惯性尾巴的几个
+                // tick 合并/丢掉,松手后反而变慢。采样门已经降到 16ms(一帧一次),
+                // 惯性和手指段同节奏,统一走 tryStartScrollInertia。
                 tryStartScrollInertia(meta, lastScrollTimeMs);
             }
         }
@@ -563,7 +549,9 @@ public class InputHandlerTouchpad extends InputHandlerGeneric {
         boolean lowFpsScroll = isLowFrameRateScrollProtocol();
         long scrollSamplingTimeMs;
         if (lowFpsScroll) {
-            scrollSamplingTimeMs = 60;
+            // 一帧一次。原来的 60ms 门让 RDP/VNC 滚动只有 ~16.7Hz,手指跟手时
+            // 画面一跳一跳;服务端 wheel 本身会累加小 delta,不需要靠大间隔合并。
+            scrollSamplingTimeMs = 16;
         } else {
             scrollSamplingTimeMs = SCROLL_SAMPLING_MS;
             if (canvas.fpsCounter.getAvgFps() > 0) {

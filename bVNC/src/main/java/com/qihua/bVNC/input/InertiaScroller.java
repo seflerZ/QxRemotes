@@ -53,6 +53,9 @@ final class InertiaScroller {
     private static final float DECAY_SCROLL = 0.96f;
     // 速度小于此阈值(px/tick)即停止,避免无限逼近 0
     private static final float STOP_THRESHOLD = 0.5f;
+    // 滚动惯性的停尾阈值:服务端 scroll 粒度为 1 格(10px),速度太低时凑一格要等
+    // 50~160ms,视觉上是一跳一跳的"锯齿"。在步距还密(约 30ms/格)时就收尾。
+    private static final float STOP_THRESHOLD_SCROLL = 5f;
     // 单指移动动量:松手时每 tick 光标位移低于此值不触发滑行,精细微调不飘(仅快甩才滑)
     private static final float FLING_MIN_SPEED = 4f;
     // 松手距最后一次移动超过此时长视为已停顿,不触发滑行,避免"移动-停顿-松手"误滑
@@ -261,9 +264,23 @@ final class InertiaScroller {
             float speedY = initialSpeedY * baseInterval;
 
             if (swiping) {
-                while ((Math.abs(speedX) > STOP_THRESHOLD || Math.abs(speedY) > STOP_THRESHOLD)
+                // xorgxrdp 的 xrdpmouse 对 scroll delta 做 delta/10 整数截断,
+                // 小于 10 的一律钳成 ±1。惯性尾巴每 16ms 发一个小 delta 会被
+                // 服务端"抬平"成匀速、而且一直发到速度低于阈值 → 松手后匀速滚很远。
+                // 累积到 10px 再发,事件数随衰减减少,尾巴才是减速的。
+                final float unit = 10f;
+                float pendingX = 0f;
+                float pendingY = 0f;
+                while ((Math.abs(speedX) > STOP_THRESHOLD_SCROLL || Math.abs(speedY) > STOP_THRESHOLD_SCROLL)
                         && !thread.isInterrupted()) {
-                    doScroll.doScroll(pointer.getX(), pointer.getY(), -speedX, -speedY, metaState);
+                    pendingX += speedX;
+                    pendingY += speedY;
+                    if (Math.abs(pendingX) >= unit || Math.abs(pendingY) >= unit) {
+                        doScroll.doScroll(pointer.getX(), pointer.getY(),
+                                          -pendingX, -pendingY, metaState);
+                        pendingX = 0f;
+                        pendingY = 0f;
+                    }
 
                     speedX *= DECAY_SCROLL;
                     speedY *= DECAY_SCROLL;
