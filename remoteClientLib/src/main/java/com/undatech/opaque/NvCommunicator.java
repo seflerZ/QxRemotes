@@ -62,6 +62,11 @@ public class NvCommunicator extends RemoteConnectable implements NvConnectionLis
     private static final int MOUSE_BUTTON_SCROLL_RIGHT = PTRFLAGS_HWHEEL | PTRFLAGS_WHEEL_NEGATIVE | 0x00a8;
     private String debugMsg;
 
+    /** Latest perf text from Moonlight (decoder fps / net stats), null when disabled. */
+    public String getDebugMsg() {
+        return debugMsg;
+    }
+
     public NvCommunicator(Activity activity, Viewable viewable, Handler handler) {
         super(false, handler);
         this.activity = activity;

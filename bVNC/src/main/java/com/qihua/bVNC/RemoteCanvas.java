@@ -1487,7 +1487,7 @@ public class RemoteCanvas extends SurfaceView implements Viewable
     @Override
     public void onVideoFrameRendered() {
         if (fpsCounter != null) {
-            fpsCounter.count();
+            fpsCounter.countRenderedFrame();
         }
         if (connInitializer != null) {
             connInitializer.onVideoFrameRendered();

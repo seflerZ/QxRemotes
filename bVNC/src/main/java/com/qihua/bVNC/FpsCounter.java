@@ -5,6 +5,8 @@ import android.graphics.Paint;
 import android.graphics.Typeface;
 
 public class FpsCounter {
+    private static final long GAP_WINDOW_MS = 5000;
+
     private int fps = 0;
     private int avg = 0;
     private int max = 0;
@@ -17,6 +19,12 @@ public class FpsCounter {
     private long maxlastMs = 0;
     private int frameDropped = 0;
     private long frameDroppedMs = 0;
+
+    // Frame-interval probe for the direct-render path: worst gap in the last
+    // few seconds is what a visible "big stutter" shows up as.
+    private long lastFrameAtMs = 0;
+    private long worstGapMs = 0;
+    private long gapWindowStartMs = 0;
 
     Paint _textPaint;
 
@@ -35,6 +43,37 @@ public class FpsCounter {
     }
     public synchronized void countInput() {
         inputCount += 1;
+    }
+
+    /**
+     * A frame reached the display in direct-render mode. There is no DrawWorker
+     * calling {@link #finish} there, so stats are folded and reset here.
+     */
+    public synchronized void countRenderedFrame() {
+        long now = System.currentTimeMillis();
+        if (lastFrameAtMs == 0) {
+            gapWindowStartMs = now;
+        } else {
+            if (now - gapWindowStartMs > GAP_WINDOW_MS) {
+                worstGapMs = 0;
+                gapWindowStartMs = now;
+            }
+            long gap = now - lastFrameAtMs;
+            if (gap > worstGapMs) {
+                worstGapMs = gap;
+            }
+        }
+        lastFrameAtMs = now;
+        count();
+        finish(now);
+    }
+
+    public synchronized long getWorstGapMs() {
+        return worstGapMs;
+    }
+
+    public synchronized int getLastFps() {
+        return lst;
     }
 
     public long getLastCountMs() {

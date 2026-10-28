@@ -1,12 +1,15 @@
 package com.qihua.bVNC.connection;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Rect;
+import android.graphics.Typeface;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.util.Log;
+import android.util.TypedValue;
 import android.view.Display;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -15,7 +18,9 @@ import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewParent;
 import android.widget.FrameLayout;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import com.limelight.binding.input.ControllerHandler;
@@ -24,6 +29,7 @@ import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.qihua.bVNC.App;
 import com.qihua.bVNC.Constants;
+import com.qihua.bVNC.FpsCounter;
 import com.qihua.bVNC.R;
 import com.qihua.bVNC.RemoteCanvas;
 import com.qihua.bVNC.Utils;
@@ -65,6 +71,41 @@ public class NvStreamConnectionInitializer extends ConnectionInitializer {
     private volatile boolean firstFrameShown;
     private volatile Bitmap pendingScreenshot;
     private View.OnLayoutChangeListener parentLayoutListener;
+    private TextView debugOverlay;
+    private PreferenceConfiguration prefConfig;
+    private SharedPreferences debugPrefs;
+    private volatile boolean destroyed;
+
+    // Toggling the pref while a session is live should show/hide the overlay
+    // immediately instead of waiting for a reconnect.
+    private final SharedPreferences.OnSharedPreferenceChangeListener debugPrefListener =
+            (prefs, key) -> {
+                if (key == null || !key.equals(Constants.enableDebugInfo) || canvas == null) {
+                    return;
+                }
+                boolean enabled = prefs.getBoolean(key, false);
+                if (prefConfig != null) {
+                    prefConfig.enablePerfOverlay = enabled;
+                }
+                canvas.post(() -> {
+                    if (enabled) {
+                        createDebugOverlay();
+                    } else {
+                        removeDebugOverlay();
+                    }
+                });
+            };
+
+    private final Runnable debugOverlayTick = new Runnable() {
+        @Override
+        public void run() {
+            if (debugOverlay == null || canvas == null) {
+                return;
+            }
+            debugOverlay.setText(buildDebugText());
+            canvas.handler.postDelayed(this, 500);
+        }
+    };
 
     public NvStreamConnectionInitializer(Connection conn, Context ctx) {
         this.conn = conn;
@@ -213,6 +254,12 @@ public class NvStreamConnectionInitializer extends ConnectionInitializer {
 
     @Override
     public synchronized void onDestroy() {
+        destroyed = true;
+        removeDebugOverlay();
+        if (debugPrefs != null) {
+            debugPrefs.unregisterOnSharedPreferenceChangeListener(debugPrefListener);
+            debugPrefs = null;
+        }
         if (canvas != null && parentLayoutListener != null
                 && canvas.getParent() instanceof ViewGroup) {
             ((ViewGroup) canvas.getParent()).removeOnLayoutChangeListener(parentLayoutListener);
@@ -255,6 +302,7 @@ public class NvStreamConnectionInitializer extends ConnectionInitializer {
                 }
             }
             applyLetterbox();
+            createDebugOverlay();
         });
     }
 
@@ -311,6 +359,77 @@ public class NvStreamConnectionInitializer extends ConnectionInitializer {
             ((FrameLayout.LayoutParams) lp).gravity = Gravity.CENTER;
         }
         canvas.setLayoutParams(lp);
+    }
+
+    /**
+     * Direct rendering bypasses DrawWorker, which used to be the only place the
+     * on-screen debug text was painted. Overlay a TextView instead (the codec
+     * owns the SurfaceView surface, so it cannot be drawn onto directly).
+     */
+    private void createDebugOverlay() {
+        if (destroyed || debugOverlay != null || canvas == null) {
+            return;
+        }
+        if (!Utils.querySharedPreferenceBoolean(ctx, Constants.enableDebugInfo, false)) {
+            return;
+        }
+        if (!(canvas.getParent() instanceof FrameLayout)) {
+            return;
+        }
+        FrameLayout parent = (FrameLayout) canvas.getParent();
+
+        TextView view = new TextView(ctx);
+        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        view.setTypeface(Typeface.MONOSPACE);
+        view.setTextColor(Color.WHITE);
+        view.setShadowLayer(2, 1, 1, Color.BLACK);
+        view.setBackgroundColor(0x66000000);
+        view.setClickable(false);
+        view.setFocusable(false);
+
+        int pad = Math.round(6 * ctx.getResources().getDisplayMetrics().density);
+        view.setPadding(pad, pad, pad, pad);
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.gravity = Gravity.TOP | Gravity.START;
+        lp.leftMargin = pad;
+        lp.topMargin = pad;
+        parent.addView(view, lp);
+
+        debugOverlay = view;
+        view.setText(buildDebugText());
+        canvas.handler.postDelayed(debugOverlayTick, 500);
+    }
+
+    private void removeDebugOverlay() {
+        if (canvas != null) {
+            canvas.removeCallbacks(debugOverlayTick);
+        }
+        TextView view = debugOverlay;
+        debugOverlay = null;
+        if (view != null) {
+            ViewParent parent = view.getParent();
+            if (parent instanceof ViewGroup) {
+                ((ViewGroup) parent).removeView(view);
+            }
+        }
+    }
+
+    private String buildDebugText() {
+        StringBuilder sb = new StringBuilder();
+        FpsCounter fps = canvas != null ? canvas.getFpsCounter() : null;
+        if (fps != null) {
+            sb.append("FPS ").append(fps.getLastFps())
+                    .append("  MAX GAP ").append(fps.getWorstGapMs()).append("ms");
+        }
+        String msg = canvas != null && canvas.nvcomm != null ? canvas.nvcomm.getDebugMsg() : null;
+        if (msg != null && !msg.isEmpty()) {
+            if (sb.length() > 0) {
+                sb.append('\n');
+            }
+            sb.append(msg);
+        }
+        return sb.toString();
     }
 
     /**
@@ -409,6 +528,9 @@ public class NvStreamConnectionInitializer extends ConnectionInitializer {
         prefConfig.videoFormat = PreferenceConfiguration.FormatOption.AUTO;
         prefConfig.enableLatencyToast = false;
         prefConfig.enablePerfOverlay = Utils.querySharedPreferenceBoolean(canvas.activity, Constants.enableDebugInfo, false);
+        this.prefConfig = prefConfig;
+        debugPrefs = ctx.getSharedPreferences(Constants.generalSettingsTag, Context.MODE_PRIVATE);
+        debugPrefs.registerOnSharedPreferenceChangeListener(debugPrefListener);
 //        prefConfig.videoFormat = PreferenceConfiguration.FormatOption.FORCE_H264;
 
         // reduce bitrate if on cellular connection
