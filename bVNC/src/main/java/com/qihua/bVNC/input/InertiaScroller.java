@@ -114,7 +114,10 @@ final class InertiaScroller {
      * SSH / RDP-low-fps / free 版等想关掉的子类,只要传 false 进来即可。
      */
     void enable(boolean enabled) {
-        this.enabled = enabled;
+        // SSH 必须永远关闭:终端滚动由 libvterm 渲染,惯性会造成
+        // alt-buffer / scrollback 状态错乱,长按选词也会被惯性尾巴带偏。
+        // 这里做硬约束,不依赖调用方是否记得传 false。
+        this.enabled = enabled && !isSshPointer();
     }
 
     /** 当前是否已 enable —— 用于子类在 ACTION_UP 短路决策时查询。 */
