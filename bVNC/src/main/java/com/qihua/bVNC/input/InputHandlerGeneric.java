@@ -477,6 +477,9 @@ abstract class InputHandlerGeneric extends MyGestureDectector.SimpleOnGestureLis
         pointer.leftButtonDown(x, y, metaState);
         pointer.releaseButton(x, y, metaState);
 
+        // RDP:远端光标变成 I-beam 说明点进了输入框,自动弹软键盘
+        canvas.onTapMaybeShowKeyboard();
+
         return true;
     }
 

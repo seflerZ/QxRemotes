@@ -255,6 +255,7 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
     private boolean customKeyboardEnabled;
     private boolean customKeyboardFloating;
     private boolean disableImeWithHwKeyboard;
+    private boolean autoKeyboardOnTextTap;
 
     /**
      * Helper method to get Display object based on Android version and context type
@@ -666,6 +667,8 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
 
         disableImeWithHwKeyboard = Utils.querySharedPreferenceBoolean(
                 this, Constants.disableImeWithHwKeyboard, true);
+        autoKeyboardOnTextTap = Utils.querySharedPreferenceBoolean(
+                this, Constants.autoKeyboardOnTextTap, true);
         applySoftInputMode();
 
         // the progress dialog can not be displayed in external monitor, so accept it from the touchpad
@@ -1595,6 +1598,8 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
 
         disableImeWithHwKeyboard = Utils.querySharedPreferenceBoolean(
                 this, Constants.disableImeWithHwKeyboard, true);
+        autoKeyboardOnTextTap = Utils.querySharedPreferenceBoolean(
+                this, Constants.autoKeyboardOnTextTap, true);
         applySoftInputMode();
 
         // Start back tap keyboard helper if enabled
@@ -2520,6 +2525,16 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
         if (suppress && softKeyboardUp && !customKeyboardEnabled) {
             hideKeyboard();
         }
+    }
+
+    /** 点击落在远端 I-beam(输入框)上时自动弹软键盘 */
+    public boolean isAutoKeyboardOnTextTap() {
+        return autoKeyboardOnTextTap;
+    }
+
+    /** 外接键盘且要求禁用 IME 时,不该弹系统输入法 */
+    public boolean isImeSuppressedByHwKeyboard() {
+        return disableImeWithHwKeyboard && hasPhysicalKeyboard();
     }
 
     public void showKeyboard() {

@@ -36,6 +36,13 @@ public interface Viewable {
 
     void setSoftCursorBitmap(Bitmap bitmap, int width, int height, int xPos, int yPos);
 
+    /**
+     * 远端光标形状变化时回调(目前只有 RDP 会发),type 见
+     * {@link com.undatech.opaque.input.PointerShape}。
+     */
+    default void onPointerShapeChanged(int type) {
+    }
+
     void mouseMode(boolean relative);
 
     boolean isAbleToPan();

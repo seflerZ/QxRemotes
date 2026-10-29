@@ -220,6 +220,7 @@ public class Constants {
     public static final String backTapShowKeyboard = "backTapShowKeyboard";
     public static final String customKeyboardEnabled = "customKeyboardEnabled";
     public static final String disableImeWithHwKeyboard = "disableImeWithHwKeyboard";
+    public static final String autoKeyboardOnTextTap = "autoKeyboardOnTextTap";
     public static final String customKeyboardBottomFraction = "customKeyboardBottomFraction";
     public static final String customKeyboardFloating = "customKeyboardFloating";
     public static final String customKeyboardXFraction = "customKeyboardXFraction";

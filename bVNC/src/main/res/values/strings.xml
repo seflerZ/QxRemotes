@@ -980,6 +980,8 @@ Below that is where you configure your connection.
     <string name="custom_keyboard_enabled_hint">Replace the system IME with the app\'s own keyboard. Sends plain Unicode keys, splits on wide screens, drag to reposition</string>
     <string name="disable_ime_with_hw_keyboard">Disable IME With External Keyboard</string>
     <string name="disable_ime_with_hw_keyboard_hint">When a physical keyboard is attached, the system IME no longer pops up on its own. The keyboard button and edge gestures still show it on demand</string>
+    <string name="auto_keyboard_on_text_tap">Auto Keyboard On Text Tap</string>
+    <string name="auto_keyboard_on_text_tap_hint">RDP only: when the remote cursor turns into an I-beam, tapping it raises the soft keyboard</string>
 
     <string name="extrakeys_pref">Extra Key Customization</string>
     <string name="pref_extrakeys_vertical_pref">Configs for Vertical Screen</string>

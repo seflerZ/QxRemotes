@@ -14,6 +14,7 @@ import com.freerdp.freerdpcore.application.SessionState;
 import com.freerdp.freerdpcore.domain.BookmarkBase;
 import com.freerdp.freerdpcore.domain.ManualBookmark;
 import com.freerdp.freerdpcore.services.LibFreeRDP;
+import com.undatech.opaque.input.PointerShape;
 import com.undatech.opaque.input.RdpKeyboardMapper;
 import com.undatech.opaque.input.RemoteKeyboard;
 import com.undatech.opaque.util.GeneralUtils;
@@ -487,6 +488,9 @@ public class RdpCommunicator extends RemoteConnectable implements RdpKeyboardMap
 
     @Override
     public void OnPointerNew(byte[] pdata, int width, int height, int xPos, int yPos) {
+        // 光标形状分类:判断指针是否落在可输入文本上(I-beam)
+        viewable.onPointerShapeChanged(PointerShape.classify(pdata, width, height, xPos, yPos));
+
         // Reconstruct bitmap headers
         Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
         int offset = 0;

@@ -86,6 +86,7 @@ import com.undatech.opaque.DrawTask;
 import com.undatech.opaque.MessageDialogs;
 import com.undatech.opaque.NvCommunicator;
 import com.undatech.opaque.RdpCommunicator;
+import com.undatech.opaque.input.PointerShape;
 import com.undatech.opaque.RemoteClientLibConstants;
 import com.undatech.opaque.RemoteConnectable;
 import com.undatech.opaque.SpiceCommunicator;
@@ -150,6 +151,15 @@ public class RemoteCanvas extends SurfaceView implements Viewable
     public ConnectionInitializer connInitializer;
 
     private DrawWorker drawWorker;
+
+    /**
+     * 远端光标形状(RDP 专有)。形状随服务器回包滞后一个 RTT,点击瞬间拿到的是
+     * 旧形状,所以点击只是挂一个待决,等新形状到了再决定要不要弹软键盘。
+     */
+    private static final long POINTER_SHAPE_DECIDE_DELAY_MS = 250;
+    private volatile int lastPointerShape = PointerShape.UNKNOWN;
+    private boolean pointerShapePending = false;
+    private final Runnable pointerShapeDecision = this::decidePointerShape;
 
     private InputHandler inputHandler;
 
@@ -1616,6 +1626,39 @@ public class RemoteCanvas extends SurfaceView implements Viewable
 
         pointer.setHotspotX(xPos);
         pointer.setHotspotY(yPos);
+    }
+
+    @Override
+    public void onPointerShapeChanged(int type) {
+        lastPointerShape = type;
+        if (handler == null) return;
+        handler.post(() -> {
+            if (!pointerShapePending) return;
+            pointerShapePending = false;
+            handler.removeCallbacks(pointerShapeDecision);
+            decidePointerShape();
+        });
+    }
+
+    /**
+     * 左键点击后调用:远端光标形状更新到达时,若指针落在 I-beam(文本框)上就弹软键盘。
+     * 形状更新晚于点击一个 RTT,所以这里只挂待决,由形状到达或超时兜底。
+     */
+    public void onTapMaybeShowKeyboard() {
+        if (getProtocolType() != ProtocolType.RDP) return;
+        if (activity == null || handler == null) return;
+        if (!activity.isAutoKeyboardOnTextTap()) return;
+        if (activity.isImeSuppressedByHwKeyboard()) return;
+
+        pointerShapePending = true;
+        handler.removeCallbacks(pointerShapeDecision);
+        handler.postDelayed(pointerShapeDecision, POINTER_SHAPE_DECIDE_DELAY_MS);
+    }
+
+    private void decidePointerShape() {
+        if (lastPointerShape != PointerShape.TEXT) return;
+        if (activity == null || activity.isSoftKeyboardUp()) return;
+        activity.showKeyboard();
     }
 
     public RemotePointer getPointer() {

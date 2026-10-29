@@ -66,5 +66,11 @@
             app:defaultValue="true"
             android:title="@string/disable_ime_with_hw_keyboard"
             android:summary="@string/disable_ime_with_hw_keyboard_hint"/>
+        <SwitchPreferenceCompat
+            android:defaultValue="true"
+            android:key="autoKeyboardOnTextTap"
+            app:defaultValue="true"
+            android:title="@string/auto_keyboard_on_text_tap"
+            android:summary="@string/auto_keyboard_on_text_tap_hint"/>
     </PreferenceCategory>
 </PreferenceScreen>
