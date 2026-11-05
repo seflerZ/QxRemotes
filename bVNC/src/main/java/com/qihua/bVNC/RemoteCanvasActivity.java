@@ -421,8 +421,14 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
             touchpad = canvas;
         }
 
+        // 外屏模式下 canvas 由 Presentation 创建,getContext() 不是 Activity;弹框需要宿主
+        canvas.setHostContext(this);
+        if (touchpad != canvas) {
+            touchpad.setHostContext(this);
+        }
+
         canvas.setSystemUiVisibility(
-                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                        View.SYSTEM_UI_FLAG_LAYOUT_STABLE
                         | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
                         | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
                         | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION

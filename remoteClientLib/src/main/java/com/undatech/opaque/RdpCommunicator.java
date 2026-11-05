@@ -56,6 +56,22 @@ public class RdpCommunicator extends RemoteConnectable implements RdpKeyboardMap
     private boolean reattemptWithoutCredentials = false;
     private boolean authenticationAttempted = false;
     private boolean disconnectRequested = false;
+    /** 一次连接尝试内只向 UI 报一次失败,避免 OnDisconnecting/OnConnectionFailure/超时重复弹框 */
+    private boolean failureReported = false;
+    /** FreeRDP 上报的失败原因(如 "Logon failed."),用来区分认证失败与网络失败 */
+    private String lastError = "";
+    /** FreeRDP 在某些认证失败下既不回调也不报错,靠这个兜底,免得进度框永远转圈 */
+    private static final long CONNECT_TIMEOUT_MS = 30000;
+    private final Runnable connectTimeout = new Runnable() {
+        @Override
+        public void run() {
+            if (myself.isInNormalProtocol() || disconnectRequested) {
+                return;
+            }
+            Log.w(TAG, "Connection attempt timed out after " + CONNECT_TIMEOUT_MS + "ms");
+            reportConnectionFailure();
+        }
+    };
 
     // 双缓冲的 back 里是"两帧前"的内容:每次发布前只需把上次发布以来累积的
     // 脏区从 native primary 拷过去,不必整帧 14.7MB 拷贝(打字/终端场景能省一个
@@ -199,6 +215,7 @@ public class RdpCommunicator extends RemoteConnectable implements RdpKeyboardMap
     public void close() {
         setIsInNormalProtocol(false);
         disconnectRequested = true;
+        handler.removeCallbacks(connectTimeout);
 
         if (session == null) {
             return;
@@ -399,6 +416,10 @@ public class RdpCommunicator extends RemoteConnectable implements RdpKeyboardMap
     }
 
     public void connect() {
+        failureReported = false;
+        lastError = "";
+        handler.removeCallbacks(connectTimeout);
+
         // 不在这里提线程优先级:connect() 跑在 UI 线程上(handler.post -> startConnection),
         // 而 freerdp_connect() 会自己 spawn 一个 native 会话线程就返回,真正的解码/音频
         // 都不在这个线程上。之前的 setThreadPriority(URGENT_DISPLAY) 实际把主线程永久
@@ -412,11 +433,52 @@ public class RdpCommunicator extends RemoteConnectable implements RdpKeyboardMap
             InetAddress.getByName(hostname);
         } catch (UnknownHostException e) {
             OnConnectionFailure(session.getInstance());
-            handler.sendEmptyMessage(RemoteClientLibConstants.RDP_UNABLE_TO_CONNECT);
+            reportConnectionFailure();
             return;
         }
 
+        handler.postDelayed(connectTimeout, CONNECT_TIMEOUT_MS);
         session.connect(context);
+    }
+
+    private void reportConnectionFailure() {
+        if (failureReported) {
+            return;
+        }
+        failureReported = true;
+        handler.removeCallbacks(connectTimeout);
+        if (isAuthFailure()) {
+            Log.w(TAG, "Sending message: RDP_AUTH_FAILED, lastError: " + lastError);
+            handler.sendEmptyMessage(RemoteClientLibConstants.RDP_AUTH_FAILED);
+        } else {
+            Log.w(TAG, "Sending message: RDP_UNABLE_TO_CONNECT, lastError: " + lastError);
+            handler.sendEmptyMessage(RemoteClientLibConstants.RDP_UNABLE_TO_CONNECT);
+        }
+    }
+
+    /** 从 FreeRDP 的 last error 里认出"凭据问题",好给用户看对的提示 */
+    private boolean isAuthFailure() {
+        if (lastError == null) {
+            return false;
+        }
+        String e = lastError.toLowerCase(java.util.Locale.US);
+        return e.contains("logon failed") || e.contains("authentication") || e.contains("password")
+                || e.contains("credentials") || e.contains("access denied")
+                || e.contains("account") || e.contains("logon type");
+    }
+
+    /** 失败时把 FreeRDP 的错误描述取出来,供提示文案与日志使用 */
+    private void captureLastError(long instance) {
+        try {
+            lastError = LibFreeRDP.getLastErrorString(instance);
+        } catch (Throwable t) {
+            lastError = "";
+        }
+    }
+
+    /** close()/reconnect() 换了 session 之后,旧 native 实例迟到的回调不能污染当前连接状态 */
+    private boolean isStaleInstance(long instance) {
+        return session == null || instance != session.getInstance();
     }
 
     @Override
@@ -431,12 +493,17 @@ public class RdpCommunicator extends RemoteConnectable implements RdpKeyboardMap
 
     @Override
     public void OnConnectionSuccess(long instance) {
+        if (isStaleInstance(instance)) {
+            return;
+        }
         Log.v(TAG, "OnConnectionSuccess");
         reattemptWithoutCredentials = false;
         authenticationAttempted = false;
         // Reconnect succeeded — allow future disconnects to surface as RDP_CONNECT_FAILURE
         // again. close() inside reconnect() sets this to true and it's never reset elsewhere.
         disconnectRequested = false;
+        failureReported = false;
+        handler.removeCallbacks(connectTimeout);
         myself.setIsInNormalProtocol(true);
 
         viewable.onConnectionSuccess();
@@ -444,12 +511,23 @@ public class RdpCommunicator extends RemoteConnectable implements RdpKeyboardMap
 
     @Override
     public void OnConnectionFailure(long instance) {
+        if (isStaleInstance(instance)) {
+            return;
+        }
+        captureLastError(instance);
         Log.v(TAG, "OnConnectionFailure");
         myself.setIsInNormalProtocol(false);
+        if (!disconnectRequested) {
+            reportConnectionFailure();
+        }
     }
 
     @Override
     public void OnDisconnecting(long instance) {
+        if (isStaleInstance(instance)) {
+            return;
+        }
+        captureLastError(instance);
         Log.v(TAG, "OnDisconnecting, reattemptWithoutCredentials: " + reattemptWithoutCredentials +
                 ", authenticationAttempted: " + authenticationAttempted +
                 ", disconnectRequested: " + disconnectRequested +
@@ -461,26 +539,30 @@ public class RdpCommunicator extends RemoteConnectable implements RdpKeyboardMap
             initSession("", "", "");
             connect();
         } else if (authenticationAttempted && !myself.isInNormalProtocol()) {
+            handler.removeCallbacks(connectTimeout);
             Log.v(TAG, "Sending message: RDP_AUTH_FAILED");
             handler.sendEmptyMessage(RemoteClientLibConstants.GET_RDP_CREDENTIALS);
         } else if (!disconnectRequested && !myself.isInNormalProtocol()) {
-            Log.v(TAG, "Sending message: RDP_UNABLE_TO_CONNECT");
-            handler.sendEmptyMessage(RemoteClientLibConstants.RDP_UNABLE_TO_CONNECT);
+            reportConnectionFailure();
         } else if (!disconnectRequested) {
             myself.setIsInNormalProtocol(false);
 //            initSession(username, domain, password);
 //            connect();
+            handler.removeCallbacks(connectTimeout);
             handler.sendEmptyMessage(RemoteClientLibConstants.RDP_CONNECT_FAILURE);
         }
     }
 
     @Override
     public void OnDisconnected(long instance) {
+        if (isStaleInstance(instance)) {
+            return;
+        }
         Log.v(TAG, "OnDisconnected");
         if (!myself.isInNormalProtocol()) {
-            Log.v(TAG, "Sending message: RDP_UNABLE_TO_CONNECT");
-            handler.sendEmptyMessage(RemoteClientLibConstants.RDP_UNABLE_TO_CONNECT);
+            reportConnectionFailure();
         } else {
+            handler.removeCallbacks(connectTimeout);
             Log.v(TAG, "Sending message: RDP_CONNECT_FAILURE");
             handler.sendEmptyMessage(RemoteClientLibConstants.RDP_CONNECT_FAILURE);
         }

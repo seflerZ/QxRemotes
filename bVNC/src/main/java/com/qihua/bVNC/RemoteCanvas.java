@@ -176,6 +176,20 @@ public class RemoteCanvas extends SurfaceView implements Viewable
 
     private InputHandler inputHandler;
 
+    /**
+     * 宿主 Activity。外接屏模式下本 View 由 CanvasPresentation(getBaseContext()) inflate,
+     * getContext() 追不回 Activity,而弹框/取 FragmentManager 都要它。
+     */
+    private android.content.Context hostContext;
+
+    public void setHostContext(android.content.Context c) {
+        hostContext = c;
+    }
+
+    private android.content.Context dialogContext() {
+        return hostContext != null ? hostContext : getContext();
+    }
+
     private boolean outDisplay = false;
 
     Database database;
@@ -328,6 +342,10 @@ public class RemoteCanvas extends SurfaceView implements Viewable
                     .setView(dialogView)
                     .setCancelable(true)
                     .setOnCancelListener(dialog -> {
+                        // 外接屏模式下 touchpad 这个 canvas 从没被 initializeCanvas 过,handler 为 null
+                        if (handler == null) {
+                            return;
+                        }
                         handler.post(() ->
                                 Utils.showFatalErrorMessage(getContext(),
                                         getContext().getString(R.string.info_progress_dialog_aborted)));
@@ -588,7 +606,7 @@ public class RemoteCanvas extends SurfaceView implements Viewable
         this.hideKeyboardAndExtraKeys = hideKeyboardAndExtraKeys;
         connection = conn;
         sshTunneled = (connection.getConnectionType() == Constants.CONN_TYPE_SSH);
-        handler = new RemoteCanvasHandler(getContext(), this, connection);
+        handler = new RemoteCanvasHandler(dialogContext(), this, connection);
 
         // Per-protocol lifecycle now lives in ConnectionInitializer strategies.
         // The factory picks one based on the connection type (and SPICE
@@ -801,7 +819,7 @@ public class RemoteCanvas extends SurfaceView implements Viewable
         closeConnection();
         handler.post(new Runnable() {
             public void run() {
-                Utils.showFatalErrorMessage(getContext(), error);
+                Utils.showFatalErrorMessage(dialogContext(), error);
             }
         });
     }

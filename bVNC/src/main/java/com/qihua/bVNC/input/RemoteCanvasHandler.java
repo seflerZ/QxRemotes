@@ -141,7 +141,13 @@ public class RemoteCanvasHandler extends Handler {
                         Utils.justFinish(context);
                     }
                 });
-        message.show(fm, "endingDialog");
+        if (fm != null) {
+            message.show(fm, "endingDialog");
+        } else {
+            // 拿不到 Activity 的 FragmentManager 时至少别 NPE 崩掉
+            android.util.Log.e(TAG, "displayMessageAndFinish: no FragmentManager, message="
+                    + context.getString(messageTextId));
+        }
         c.closeConnection();
     }
 
@@ -470,12 +476,17 @@ public class RemoteCanvasHandler extends Handler {
                     int msgId = c.everConnected
                             ? R.string.error_rdp_reconnect_failed
                             : R.string.error_rdp_unable_to_connect;
-                    c.showFatalMessageAndQuit(context.getString(msgId));
+                    // 外接屏模式下 canvas 是 Presentation+baseContext 创建的,其 Context 里
+                    // 弹 AlertDialog 不会显示;走 Activity 的 FragmentManager 才一定看得见。
+                    c.dismissProgressDialog();
+                    displayMessageAndFinish(R.string.error, msgId, android.R.string.ok);
                 }
                 break;
             case RemoteClientLibConstants.RDP_AUTH_FAILED:
                 if (c.maintainConnection) {
-                    c.showFatalMessageAndQuit(context.getString(R.string.error_rdp_authentication_failed));
+                    c.dismissProgressDialog();
+                    displayMessageAndFinish(R.string.error, R.string.error_rdp_authentication_failed,
+                            android.R.string.ok);
                 }
                 break;
             case RemoteClientLibConstants.SERVER_CUT_TEXT:
