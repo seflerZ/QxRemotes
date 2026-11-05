@@ -81,6 +81,18 @@ final class InertiaScroller {
     /** 松手速度(px/ms),由 recordFingerMoveSample / recordScrollCursorSample 写入 */
     private float initialSpeedX = 0;
     private float initialSpeedY = 0;
+    /**
+     * 双指滚动专用的松手速度(px/ms)与 delta 换算比例。
+     * 必须跟光标惯性分开存:滚动以前没采样过自己的速度,惯性尾巴是拿单指光标的
+     * 残留值起算的 —— 甩出去的力度跟手指完全不对应。
+     */
+    private float scrollSpeedX = 0;
+    private float scrollSpeedY = 0;
+    /**
+     * 手指 px → 远端 wheel delta 的比例(= 滚动倍率 × effectiveZoom / density)。
+     * 手指段发的 delta 和惯性尾巴发的 delta 必须是同一把尺子,否则尾巴比手指段慢一截。
+     */
+    private float scrollDeltaScale = 1f;
     /** dt 计算基准 —— finger/sample 的最近一次采样墙钟时刻 */
     private long startTime = 0;
     /** 16ms tick 基准 —— 不动,跟以前一致 */
@@ -132,6 +144,7 @@ final class InertiaScroller {
     void stop() {
         swiping = false;
         initialSpeedX = initialSpeedY = 0;
+        scrollSpeedX = scrollSpeedY = 0;
         thread.interrupt();
     }
 
@@ -142,7 +155,24 @@ final class InertiaScroller {
     void resetSampling() {
         lastMoveSampleMs = 0;
         initialSpeedX = initialSpeedY = 0;
+        scrollSpeedX = scrollSpeedY = 0;
+        scrollDeltaScale = 1f;
         startTime = System.currentTimeMillis();
+    }
+
+    /**
+     * 双指滚动采样:记下这一拍滚动自己的速度(px/ms,带符号)和手指 px → wheel delta 的比例。
+     *
+     * @param speedX/speedY 滚动速度,方向跟 cumulated 一致(手指向上为正)。
+     *                      这里存进去会取负:尾巴发的是 -pending,而手指段发的 delta
+     *                      是 +cumulated 方向,取负后两边才同向 —— 不取负尾巴就会
+     *                      往反方向甩。
+     * @param deltaScale    手指 px → 远端 wheel delta 的比例,跟手指段同一把尺子
+     */
+    void recordScrollVelocitySample(float speedX, float speedY, float deltaScale) {
+        this.scrollSpeedX = -speedX;
+        this.scrollSpeedY = -speedY;
+        this.scrollDeltaScale = deltaScale;
     }
 
     /**
@@ -219,7 +249,7 @@ final class InertiaScroller {
         if (!enabled) {
             return false;
         }
-        if (!isFlingFastEnough() || !isScrollNotPaused(lastScrollSampleMs)) {
+        if (!isScrollFlingFastEnough() || !isScrollNotPaused(lastScrollSampleMs)) {
             return false;
         }
         swiping = true;
@@ -259,14 +289,15 @@ final class InertiaScroller {
                 continue;
             }
 
-            if (initialSpeedX == 0 && initialSpeedY == 0) {
-                continue;
-            }
-
-            float speedX = initialSpeedX * baseInterval;
-            float speedY = initialSpeedY * baseInterval;
-
             if (swiping) {
+                if (scrollSpeedX == 0 && scrollSpeedY == 0) {
+                    swiping = false;
+                    continue;
+                }
+                // 速度用滚动自己的采样,并按 deltaScale 换算成远端 wheel delta 单位 ——
+                // 必须跟手指段发的 delta 同一把尺子,否则甩出去的尾巴比手指段慢一截。
+                float speedX = scrollSpeedX * baseInterval * scrollDeltaScale;
+                float speedY = scrollSpeedY * baseInterval * scrollDeltaScale;
                 // xorgxrdp 的 xrdpmouse 对 scroll delta 做 delta/10 整数截断,
                 // 小于 10 的一律钳成 ±1。惯性尾巴每 16ms 发一个小 delta 会被
                 // 服务端"抬平"成匀速、而且一直发到速度低于阈值 → 松手后匀速滚很远。
@@ -291,6 +322,12 @@ final class InertiaScroller {
                     SystemClock.sleep(baseInterval);
                 }
             } else {
+                if (initialSpeedX == 0 && initialSpeedY == 0) {
+                    swiping = false;
+                    continue;
+                }
+                float speedX = initialSpeedX * baseInterval;
+                float speedY = initialSpeedY * baseInterval;
                 while ((Math.abs(speedX) > STOP_THRESHOLD || Math.abs(speedY) > STOP_THRESHOLD)
                         && !thread.isInterrupted()) {
                     int nextX = Math.round(pointer.getX() + speedX);
@@ -321,6 +358,14 @@ final class InertiaScroller {
     private boolean isFlingFastEnough() {
         float flingSpeedX = initialSpeedX * baseInterval;
         float flingSpeedY = initialSpeedY * baseInterval;
+        return Math.abs(flingSpeedX) > FLING_MIN_SPEED
+                || Math.abs(flingSpeedY) > FLING_MIN_SPEED;
+    }
+
+    /** 双指滚动的甩动判定:用滚动自己的速度,不看光标的残留值 */
+    private boolean isScrollFlingFastEnough() {
+        float flingSpeedX = scrollSpeedX * baseInterval;
+        float flingSpeedY = scrollSpeedY * baseInterval;
         return Math.abs(flingSpeedX) > FLING_MIN_SPEED
                 || Math.abs(flingSpeedY) > FLING_MIN_SPEED;
     }

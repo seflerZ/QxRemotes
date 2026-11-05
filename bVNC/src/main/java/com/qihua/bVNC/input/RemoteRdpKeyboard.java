@@ -30,6 +30,12 @@ public class RemoteRdpKeyboard extends RemoteKeyboard {
 
     public boolean processLocalKeyEvent(int keyCode, KeyEvent evt, int additionalMetaState) {
         debugLog(App.debugLog, TAG, "processLocalKeyEvent: " + evt.toString() + " " + keyCode);
+
+        // 自动弹键盘的误触发判定:远端真的收到按键,说明这次弹起是对的
+        if (!isModifierKey(keyCode) && canvas != null) {
+            canvas.noteRemoteInput();
+        }
+
         // Drop repeated modifiers
 //        if (shouldDropModifierKeys(evt))
 //            return true;
@@ -125,6 +131,26 @@ public class RemoteRdpKeyboard extends RemoteKeyboard {
             rfb.writeKeyEvent(0, savedMetaState, false);
         } else {
             sendKeySym(meta.getKeySym(), meta.getMetaFlags());
+        }
+    }
+
+    /** 纯修饰键不算"用户输入了东西" */
+    private static boolean isModifierKey(int keyCode) {
+        switch (keyCode) {
+            case KeyEvent.KEYCODE_SHIFT_LEFT:
+            case KeyEvent.KEYCODE_SHIFT_RIGHT:
+            case KeyEvent.KEYCODE_CTRL_LEFT:
+            case KeyEvent.KEYCODE_CTRL_RIGHT:
+            case KeyEvent.KEYCODE_ALT_LEFT:
+            case KeyEvent.KEYCODE_ALT_RIGHT:
+            case KeyEvent.KEYCODE_META_LEFT:
+            case KeyEvent.KEYCODE_META_RIGHT:
+            case KeyEvent.KEYCODE_CAPS_LOCK:
+            case KeyEvent.KEYCODE_NUM_LOCK:
+            case KeyEvent.KEYCODE_SCROLL_LOCK:
+                return true;
+            default:
+                return false;
         }
     }
 }

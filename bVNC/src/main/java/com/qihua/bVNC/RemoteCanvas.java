@@ -44,6 +44,7 @@ import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.text.ClipboardManager;
 import android.text.InputType;
 import android.util.AttributeSet;
@@ -157,9 +158,21 @@ public class RemoteCanvas extends SurfaceView implements Viewable
      * 旧形状,所以点击只是挂一个待决,等新形状到了再决定要不要弹软键盘。
      */
     private static final long POINTER_SHAPE_DECIDE_DELAY_MS = 250;
+    /** 自动弹起后多久内没等到输入,就算这次是误触发 */
+    private static final long AUTO_KEYBOARD_INPUT_WINDOW_MS = 10000;
+    /** 误触发后的静默期 */
+    private static final long AUTO_KEYBOARD_SILENCE_MS = 120000;
+    /** 弹起后多久内形状变成"非文本"就认为是误触发并收回键盘 */
+    private static final long AUTO_KEYBOARD_CONTRADICT_MS = 1000;
+
     private volatile int lastPointerShape = PointerShape.UNKNOWN;
     private boolean pointerShapePending = false;
+    private boolean autoKeyboardAwaitingInput = false;
+    private long autoKeyboardShownAt = 0;
+    private int autoKeyboardShownX = 0, autoKeyboardShownY = 0;
+    private long suppressAutoKeyboardUntil = 0;
     private final Runnable pointerShapeDecision = this::decidePointerShape;
+    private final Runnable autoKeyboardWatchdog = this::checkAutoKeyboardFalseTrigger;
 
     private InputHandler inputHandler;
 
@@ -1631,8 +1644,18 @@ public class RemoteCanvas extends SurfaceView implements Viewable
     @Override
     public void onPointerShapeChanged(int type) {
         lastPointerShape = type;
+        long now = SystemClock.uptimeMillis();
         if (handler == null) return;
         handler.post(() -> {
+            // 弹起之后形状又变成"非文本":刚才用的是还没到的旧形状,收回键盘
+            if (type != PointerShape.TEXT && autoKeyboardShownAt > 0
+                    && now - autoKeyboardShownAt <= AUTO_KEYBOARD_CONTRADICT_MS
+                    && cursorStillAtShowPos()) {
+                autoKeyboardShownAt = 0;
+                Log.i(TAG, "形状随后变成非文本,收回自动弹起的键盘");
+                if (activity != null) activity.hideKeyboard();
+                markAutoKeyboardFalseTrigger("形状随后变成非文本");
+            }
             if (!pointerShapePending) return;
             pointerShapePending = false;
             handler.removeCallbacks(pointerShapeDecision);
@@ -1649,6 +1672,10 @@ public class RemoteCanvas extends SurfaceView implements Viewable
         if (activity == null || handler == null) return;
         if (!activity.isAutoKeyboardOnTextTap()) return;
         if (activity.isImeSuppressedByHwKeyboard()) return;
+        if (SystemClock.uptimeMillis() < suppressAutoKeyboardUntil) {
+            Log.d(TAG, "误触发静默期内,不弹键盘");
+            return;
+        }
 
         pointerShapePending = true;
         handler.removeCallbacks(pointerShapeDecision);
@@ -1659,6 +1686,41 @@ public class RemoteCanvas extends SurfaceView implements Viewable
         if (lastPointerShape != PointerShape.TEXT) return;
         if (activity == null || activity.isSoftKeyboardUp()) return;
         activity.showKeyboard();
+        autoKeyboardShownAt = SystemClock.uptimeMillis();
+        if (pointer != null) {
+            autoKeyboardShownX = pointer.getX();
+            autoKeyboardShownY = pointer.getY();
+        }
+        autoKeyboardAwaitingInput = true;
+        handler.removeCallbacks(autoKeyboardWatchdog);
+        handler.postDelayed(autoKeyboardWatchdog, AUTO_KEYBOARD_INPUT_WINDOW_MS);
+    }
+
+    /** 弹起之后光标有没有再动过:动过说明是新操作,不是刚才那次误判 */
+    private boolean cursorStillAtShowPos() {
+        if (pointer == null) return true;
+        return pointer.getX() == autoKeyboardShownX && pointer.getY() == autoKeyboardShownY;
+    }
+
+    /** 远端收到按键:说明这次自动弹起是对的,取消误触发判定 */
+    public void noteRemoteInput() {
+        if (!autoKeyboardAwaitingInput) return;
+        autoKeyboardAwaitingInput = false;
+        if (handler != null) handler.removeCallbacks(autoKeyboardWatchdog);
+    }
+
+    private void checkAutoKeyboardFalseTrigger() {
+        if (!autoKeyboardAwaitingInput) return;
+        markAutoKeyboardFalseTrigger("弹起后没有输入");
+    }
+
+    /** 误触发:静默一段时间,别再乱弹 */
+    private void markAutoKeyboardFalseTrigger(String reason) {
+        autoKeyboardAwaitingInput = false;
+        autoKeyboardShownAt = 0;
+        suppressAutoKeyboardUntil = SystemClock.uptimeMillis() + AUTO_KEYBOARD_SILENCE_MS;
+        if (handler != null) handler.removeCallbacks(autoKeyboardWatchdog);
+        Log.i(TAG, "误触发(" + reason + "),静默 " + (AUTO_KEYBOARD_SILENCE_MS / 1000) + " 秒");
     }
 
     public RemotePointer getPointer() {

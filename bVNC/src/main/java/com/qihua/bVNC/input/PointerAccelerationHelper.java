@@ -26,6 +26,9 @@ public class PointerAccelerationHelper {
     private long lastTimestamp;
     private float lastDistanceX;
     private float lastDistanceY;
+    // 最近一次算出的分轴带符号速度(px/ms),给惯性尾巴起算用
+    private float lastSignedSpeedX;
+    private float lastSignedSpeedY;
 
     private float speedAccelerationFactor;
     private float maxAcceleration;
@@ -44,6 +47,8 @@ public class PointerAccelerationHelper {
         this.lastTimestamp = 0;
         this.lastDistanceX = 0;
         this.lastDistanceY = 0;
+        this.lastSignedSpeedX = 0;
+        this.lastSignedSpeedY = 0;
     }
 
     /**
@@ -62,13 +67,19 @@ public class PointerAccelerationHelper {
                                                  float speedAccelerationFactor,
                                                  float maxAcceleration) {
         float speedMultiplier = baseMultiplier;
+        lastSignedSpeedX = 0;
+        lastSignedSpeedY = 0;
 
         if (lastTimestamp > 0) {
             long timeDiff = currentTime - lastTimestamp;
             if (timeDiff > 0) {
-                // 计算X和Y方向的速度
-                float speedX = Math.abs(currentDistanceX - lastDistanceX) / timeDiff;
-                float speedY = Math.abs(currentDistanceY - lastDistanceY) / timeDiff;
+                // 计算X和Y方向的速度(带符号,惯性尾巴要知道方向)
+                float signedSpeedX = (currentDistanceX - lastDistanceX) / timeDiff;
+                float signedSpeedY = (currentDistanceY - lastDistanceY) / timeDiff;
+                float speedX = Math.abs(signedSpeedX);
+                float speedY = Math.abs(signedSpeedY);
+                lastSignedSpeedX = signedSpeedX;
+                lastSignedSpeedY = signedSpeedY;
                 float speed = Math.max(speedX, speedY);
 
                 // 根据速度应用加速
@@ -118,5 +129,15 @@ public class PointerAccelerationHelper {
      */
     public long getLastTimestamp() {
         return lastTimestamp;
+    }
+
+    /** 最近一次计算出的 X 方向带符号速度(px/ms) */
+    public float getLastSignedSpeedX() {
+        return lastSignedSpeedX;
+    }
+
+    /** 最近一次计算出的 Y 方向带符号速度(px/ms) */
+    public float getLastSignedSpeedY() {
+        return lastSignedSpeedY;
     }
 }

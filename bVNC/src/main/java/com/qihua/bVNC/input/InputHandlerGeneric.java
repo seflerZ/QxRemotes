@@ -83,10 +83,13 @@ abstract class InputHandlerGeneric extends MyGestureDectector.SimpleOnGestureLis
     float yCurrentFocus;
     // These variables record whether there was a two-finger swipe performed up or down.
     boolean inSwiping = false;
-    boolean scrollUp = false;
-    boolean scrollDown = false;
-    boolean scrollLeft = false;
-    boolean scrollRight = false;
+    /** 滚动方向:一次只发一个方向。名字对应最终调用的 pointer 方法 */
+    protected static final int SCROLL_DIR_NONE = 0;
+    protected static final int SCROLL_DIR_DOWN = 1;
+    protected static final int SCROLL_DIR_UP = 2;
+    protected static final int SCROLL_DIR_LEFT = 3;
+    protected static final int SCROLL_DIR_RIGHT = 4;
+    protected int scrollDirection = SCROLL_DIR_NONE;
     // The variables which indicates how many scroll events to send per swipe
     // event and the maximum number to send at one time.
     long swipeSpeed = 1;
@@ -222,6 +225,15 @@ abstract class InputHandlerGeneric extends MyGestureDectector.SimpleOnGestureLis
     }
 
     /**
+     * 双指滚动采样:给滚动惯性起算用。速度用"光标移动约定"的带符号速度
+     * (与 cumulated 相反),deltaScale 是手指 px → 远端 wheel delta 的比例,
+     * 保证惯性尾巴跟手指段发的 delta 同一把尺子。
+     */
+    protected void recordScrollVelocitySample(float speedX, float speedY, float deltaScale) {
+        inertiaScroller.recordScrollVelocitySample(speedX, speedY, deltaScale);
+    }
+
+    /**
      * ACTION_UP 单指分支调用,内部已封 enable + fastEnough + notPaused 三道关。
      */
     protected void tryStartSingleFingerInertia(int metaState) {
@@ -295,14 +307,17 @@ abstract class InputHandlerGeneric extends MyGestureDectector.SimpleOnGestureLis
         return (int) (canvas.getAbsY() + (e.getY() - 1.f * canvas.getTop()) / scale);
     }
 
-    // 添加指针加速助手
+    // 物理鼠标路径的加速助手。鼠标的事件坐标本身就是相对位移,靠差分测速。
     protected PointerAccelerationHelper pointerAccelerationHelper;
 
-    protected Pair<Integer, Integer> computePointerPos(float diffX, float diffY, float base) {
-        long currentTime = System.currentTimeMillis();
-        float speedMultiplier = pointerAccelerationHelper.calculateAccelerationMultiplier(
-                currentTime, diffX, diffY, base, 1f, 2f);
-
+    /**
+     * 按倍率把本拍位移换算成光标的新位置。
+     *
+     * @param diffX/diffY    本拍位移
+     * @param speedMultiplier 速度倍率,由各路径自己的加速器算好(触控板走
+     *                       {@link TouchpadAcceleration},鼠标走 pointerAccelerationHelper)
+     */
+    protected Pair<Integer, Integer> computePointerPos(float diffX, float diffY, float speedMultiplier) {
         // Make distanceX/Y display density independent and apply acceleration
         float sensitivity = pointer.getSensitivity();
         int x = Math.round(diffX * sensitivity * speedMultiplier / canvas.getDisplayDensity() + pointer.pointerX);
@@ -345,7 +360,10 @@ abstract class InputHandlerGeneric extends MyGestureDectector.SimpleOnGestureLis
             fpsCounter.countInput();
         }
 
-        Pair<Integer, Integer> pointerPos = computePointerPos(newX, newY, 0.8f);
+        // 鼠标路径:事件坐标本身就是相对位移,直接喂差分式加速器测速
+        float speedMultiplier = pointerAccelerationHelper.calculateAccelerationMultiplier(
+                System.currentTimeMillis(), newX, newY, 0.8f, 1f, 2f);
+        Pair<Integer, Integer> pointerPos = computePointerPos(newX, newY, speedMultiplier);
         int x = pointerPos.first;
         int y = pointerPos.second;
 
@@ -395,19 +413,15 @@ abstract class InputHandlerGeneric extends MyGestureDectector.SimpleOnGestureLis
             case MotionEvent.ACTION_SCROLL:
                 float vscroll = e.getAxisValue(MotionEvent.AXIS_VSCROLL);
                 float hscroll = e.getAxisValue(MotionEvent.AXIS_HSCROLL);
-                scrollDown = false;
-                scrollUp = false;
-                scrollRight = false;
-                scrollLeft = false;
                 // Determine direction and speed of scrolling.
                 if (vscroll < 0) {
-                    scrollDown = true;
+                    scrollDirection = SCROLL_DIR_DOWN;
                 } else if (vscroll > 0) {
-                    scrollUp = true;
+                    scrollDirection = SCROLL_DIR_UP;
                 } else if (hscroll < 0) {
-                    scrollRight = true;
+                    scrollDirection = SCROLL_DIR_LEFT;
                 } else if (hscroll > 0) {
-                    scrollLeft = true;
+                    scrollDirection = SCROLL_DIR_RIGHT;
                 } else {
                     break;
                 }
@@ -431,14 +445,21 @@ abstract class InputHandlerGeneric extends MyGestureDectector.SimpleOnGestureLis
     protected void sendScrollEvents(int x, int y, int delta, int meta) {
         GeneralUtils.debugLog(debugLogging, TAG, "sendScrollEvents");
 
-        if (scrollDown) {
-            pointer.scrollDown(x, y, delta, meta);
-        } else if (scrollUp) {
-            pointer.scrollUp(x, y, delta, meta);
-        } else if (scrollRight) {
-            pointer.scrollLeft(x, y, delta, meta);
-        } else if (scrollLeft) {
-            pointer.scrollRight(x, y, delta, meta);
+        switch (scrollDirection) {
+            case SCROLL_DIR_DOWN:
+                pointer.scrollDown(x, y, delta, meta);
+                break;
+            case SCROLL_DIR_UP:
+                pointer.scrollUp(x, y, delta, meta);
+                break;
+            case SCROLL_DIR_LEFT:
+                pointer.scrollLeft(x, y, delta, meta);
+                break;
+            case SCROLL_DIR_RIGHT:
+                pointer.scrollRight(x, y, delta, meta);
+                break;
+            default:
+                break;
         }
     }
 
@@ -875,10 +896,7 @@ abstract class InputHandlerGeneric extends MyGestureDectector.SimpleOnGestureLis
         scalingJustFinished = false;
         // Cancel any swipes that may have been registered last time.
         inSwiping = false;
-        scrollDown = false;
-        scrollUp = false;
-        scrollRight = false;
-        scrollLeft = false;
+        scrollDirection = SCROLL_DIR_NONE;
         return true;
     }
 

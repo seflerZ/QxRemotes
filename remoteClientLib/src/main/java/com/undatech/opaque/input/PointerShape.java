@@ -44,28 +44,46 @@ public final class PointerShape {
 
         int bw = maxX - minX + 1;
         int bh = maxY - minY + 1;
+        int[] rowWidths = rowWidths(argb, width, height);
+
+        int widest = 0;
+        for (int y = minY; y <= maxY; y++) widest = Math.max(widest, rowWidths[y]);
+        int edge = Math.max(rowWidths[minY], rowWidths[maxY]);
+
+        Log.d(TAG, "classify: bbox=" + bw + "x" + bh + " hotspot=" + hotspotX + "," + hotspotY
+                + " edge=" + edge + " widest=" + widest);
 
         // I-beam 是竖直细长的一条;箭头/手型/十字都接近方形
-        if (bh < 8 || bw * 10 > bh * 16) return OTHER;
+        if (bh < 8 || bw * 10 > bh * 18) return OTHER;
 
         // 热点落在字形水平中部(箭头的热点在左上角,手型在指尖)
         if (Math.abs(hotspotX - (minX + bw / 2)) > Math.max(1, bw / 4)) return OTHER;
 
+        // 最宽的一行要贴着上下边缘:I-beam 的衬线在两端,箭头的最宽处在中部
+        int margin = Math.max(1, bh / 4);
+        boolean widestAtEdge = false;
+        for (int y = minY; y <= maxY; y++) {
+            if (rowWidths[y] < widest) continue;
+            if (y <= minY + margin || y >= maxY - margin) widestAtEdge = true;
+        }
+        if (!widestAtEdge) return OTHER;
+
         // 竖向缩放箭头上下是箭头尖不是横杠,用首末行的宽度区分
-        int edge = Math.max(rowOpaqueWidth(argb, width, minY), rowOpaqueWidth(argb, width, maxY));
         if (bw > 3 && edge * 10 < bw * 6) return OTHER;
 
-        Log.d(TAG, "classify TEXT: bbox=" + bw + "x" + bh + " edge=" + edge
-                + " hotspot=" + hotspotX + "," + hotspotY);
         return TEXT;
     }
 
-    private static int rowOpaqueWidth(byte[] argb, int width, int y) {
-        int row = y * width * 4;
-        int n = 0;
-        for (int x = 0; x < width; x++) {
-            if ((argb[row + x * 4] & 0xFF) != 0) n++;
+    private static int[] rowWidths(byte[] argb, int width, int height) {
+        int[] widths = new int[height];
+        for (int y = 0; y < height; y++) {
+            int row = y * width * 4;
+            int n = 0;
+            for (int x = 0; x < width; x++) {
+                if ((argb[row + x * 4] & 0xFF) != 0) n++;
+            }
+            widths[y] = n;
         }
-        return n;
+        return widths;
     }
 }

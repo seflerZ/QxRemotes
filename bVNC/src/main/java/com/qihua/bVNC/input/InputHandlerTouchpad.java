@@ -42,6 +42,24 @@ public class InputHandlerTouchpad extends InputHandlerGeneric {
     static final String TAG = "InputHandlerTouchpad";
     public static final int SCROLL_SAMPLING_MS = 30;
 
+    // ---- 拖光标的加速 ----
+    // 倍率 = 基础 + 速度(px/ms) × 系数,封顶 MAX。慢拖 0.8×手指,快甩封顶 2×。
+    private static final float CURSOR_ACCEL_BASE = 0.6f;
+    private static final float CURSOR_ACCEL_FACTOR = 1.0f;
+    private static final float CURSOR_ACCEL_MAX = 2.0f;
+    private final TouchpadAcceleration cursorAcceleration = new TouchpadAcceleration();
+
+    // ---- 双指滚动的加速 ----
+    // 基准倍率跟"光标移动速度"滑条联动(整体快慢):滑条 20~60(默认 30),
+    // 基准 30 对应 1.6 倍 → 拉到 60 是 3.2 倍,拉到 20 是 1.07 倍。
+    // 加速比只跟滑动快慢有关:min(1 + 速度(px/ms) × K, MAX_RATIO)。
+    private static final float SCROLL_MULTIPLIER_BASE = 1.6f;
+    private static final int CURSOR_SPEED_PREF_DEFAULT = 30;
+    private static final float SCROLL_ACCEL_K = 1.0f;
+    private static final float SCROLL_ACCEL_MAX_RATIO = 4.0f;
+    private final TouchpadAcceleration scrollAcceleration = new TouchpadAcceleration();
+    private float scrollBaseMultiplier = SCROLL_MULTIPLIER_BASE;
+
     public InputHandlerTouchpad(RemoteCanvasActivity activity, RemoteCanvas canvas, RemoteCanvas touchpad,
                                 RemotePointer pointer, boolean debugLogging) {
         super(activity, canvas, touchpad, pointer, debugLogging);
@@ -56,6 +74,18 @@ public class InputHandlerTouchpad extends InputHandlerGeneric {
         enableInertiaScrolling(Utils.querySharedPreferenceBoolean(activity.getApplicationContext(),
                 Constants.inertiaEnabled, true) && BuildConfig.EDGE_ENABLED
                 && !isSshPointer());
+
+        refreshScrollMultiplier();
+    }
+
+    /**
+     * 滚动倍率跟"光标移动速度"滑条联动:滑条 20~60,基准 30 对应 SCROLL_MULTIPLIER_BASE。
+     * 每次手势开始时刷新一次,设置改了下一手势就生效。
+     */
+    private void refreshScrollMultiplier() {
+        int cursorSpeed = Utils.querySharedPreferenceInt(
+                canvas.getContext(), Constants.touchpadCursorSpeed, CURSOR_SPEED_PREF_DEFAULT);
+        scrollBaseMultiplier = SCROLL_MULTIPLIER_BASE * (cursorSpeed / (float) CURSOR_SPEED_PREF_DEFAULT);
     }
 
     /**
@@ -211,6 +241,14 @@ public class InputHandlerTouchpad extends InputHandlerGeneric {
                         resetInertiaSampling();
                         stopInertia();
                         lastDragMoveSentMs = 0;
+
+                        // 两条路径的测速累加器归零(累加器与加速器必须一起重置:
+                        // 累加器跳回 0 而加速器还留着旧值,差分会造出巨大的假位移)
+                        cursorAcceleration.reset();
+                        scrollAcceleration.reset();
+
+                        // 设置可能刚改过,每个手势刷新一次滚动基准倍率
+                        refreshScrollMultiplier();
 
                         lastX = e.getX();
                         lastY = e.getY();
@@ -521,7 +559,10 @@ public class InputHandlerTouchpad extends InputHandlerGeneric {
                 return true;
             }
 
-            Pair<Integer, Integer> pointerPos = computePointerPos(-cumulatedX, -cumulatedY, 0.6f);
+            // 单指拖动 = 移动光标。倍率按真实速度算(慢拖 0.8×,快甩封顶 2×)
+            float cursorMultiplier = cursorAcceleration.scale(-cumulatedX, -cumulatedY,
+                    CURSOR_ACCEL_BASE, CURSOR_ACCEL_FACTOR, CURSOR_ACCEL_MAX);
+            Pair<Integer, Integer> pointerPos = computePointerPos(-cumulatedX, -cumulatedY, cursorMultiplier);
 
             // 动量采样:用光标坐标位移(而非手指位移)除以采样间隔,量纲对齐惯性线程
             // else 分支的 pointer.getX()+speed,松手滑行速度不会突变。
@@ -539,41 +580,17 @@ public class InputHandlerTouchpad extends InputHandlerGeneric {
             return true;
         }
 
-        // 协议感知采样门:
-        //   - NVStream/SPICE 走 SCROLL_SAMPLING_MS (30ms)。NV 内部 60fps,30ms 是合适节拍。
-        //   - RDP/VNC 帧率低,30ms 不会到一帧(需要 100ms+),用频繁小 tick 反而不会被
-        //     服务器处理掉。100ms 门让每个 scroll 事件携带更多合并位移,服务端能一次
-        //     完成 notch 累加。合并效果同 pointer 移动的 30ms 同窗逻辑,但 RDP/VNC
-        //     可以容忍更大窗。
-        // 同时保留:高于屏刷的速率下不至于一秒百次发包。
-        boolean lowFpsScroll = isLowFrameRateScrollProtocol();
-        long scrollSamplingTimeMs;
-        if (lowFpsScroll) {
-            // 一帧一次。原来的 60ms 门让 RDP/VNC 滚动只有 ~16.7Hz,手指跟手时
-            // 画面一跳一跳;服务端 wheel 本身会累加小 delta,不需要靠大间隔合并。
-            scrollSamplingTimeMs = 16;
-        } else {
-            scrollSamplingTimeMs = SCROLL_SAMPLING_MS;
-            if (canvas.fpsCounter.getAvgFps() > 0) {
-                scrollSamplingTimeMs = Math.min(1000 / canvas.fpsCounter.getAvgFps(), SCROLL_SAMPLING_MS);
-            }
-        }
-
-        // SSH local scrollback is painted locally (no server round-trip), so
-        // the remote-scroll sampling gate only makes the motion choppy. Let
-        // every touch sample through; the paint handler already coalesces.
-        boolean sshLocalScroll = pointer instanceof RemoteSshPointer
-                && ((RemoteSshPointer) pointer).isLocalScrollback();
-
+        // 协议感知采样门(见 computeScrollSamplingMs)
+        boolean sshLocalScroll = isSshLocalScroll();
         if (!sshLocalScroll
-                && System.currentTimeMillis() - lastScrollTimeMs < scrollSamplingTimeMs) {
+                && System.currentTimeMillis() - lastScrollTimeMs < computeScrollSamplingMs()) {
            return true;
         }
 
         // On-screen SSH scrollback follows the finger 1:1. The generic
-        // wheel chain below applies density normalization, a ×3 scale and
-        // speed acceleration (up to 10×) — correct for sending notches to
-        // a remote framebuffer, but it makes the local terminal overshoot.
+        // wheel chain below applies density normalization and speed
+        // acceleration — correct for sending notches to a remote framebuffer,
+        // but it makes the local terminal overshoot.
         // The external-display touchpad keeps the accelerated mapping.
         if (sshLocalScroll && !canvas.isOutDisplay()
                 && Math.abs(cumulatedY) >= Math.abs(cumulatedX)) {
@@ -597,36 +614,17 @@ public class InputHandlerTouchpad extends InputHandlerGeneric {
             inSwiping = true;
         }
     
-        // Calculate swipe speed and apply acceleration using the helper.
-        // 传本帧 delta（onScroll 已经把多帧 distance 累进 cumulatedX/Y，本 tick 增量即 cumulatedX/Y 自身——
-        // helper 内部存的是上一次发送时的累计值，差分得到的就是这一发送周期里的总位移，单位 px/ms 反映真实速度）。
-        float speedMultiplier = pointerAccelerationHelper.calculateAccelerationMultiplier(
-                System.currentTimeMillis(), cumulatedX, cumulatedY, 1.3f
-                , 1.4f, 10f);
-
-        // 等效缩放系数:单屏 = zoomFactor(zoom 越大越灵活,常规行为);
-        // 外屏 = 1.5 * dpiRatio,zoomFactor 显式抵消——dpi 补偿 + 远距离触控板加成,
-        // 且 zoom 越大越收敛(避免看细节时一划出屏)。
-        float effectiveZoom;
-        if (canvas.isOutDisplay()) {
-            int localDpi = (int) (touchpad.getDisplayDensity() * 160f);
-            int extDpi = canvas.getDisplayDpi();
-            float dpiRatio = (extDpi > 0 && localDpi > 0)
-                    ? ((float) localDpi / (float) extDpi) : 1.0f;
-            effectiveZoom = 1.5f * dpiRatio;
-        } else {
-            effectiveZoom = canvas.getZoomFactor();
-        }
+        // 双指滚动:倍率 = 基准(跟光标速度滑条联动) × 加速比(跟滑动快慢有关)
+        float scrollMultiplier = computeScrollMultiplier();
+        float effectiveZoom = computeEffectiveZoom();
 
         // Make distanceX/Y display density independent. 加速直接吃在 dpi 归一化之后的 px/ms
-        // 速度上 —— 飞速 swipe 时本帧 delta 大,speedMultiplier 自然冲上去,符合直觉。
-        distanceX = (cumulatedX / displayDensity) * effectiveZoom * speedMultiplier;
-        distanceY = (cumulatedY / displayDensity) * effectiveZoom * speedMultiplier;
+        // 速度上 —— 飞速 swipe 时本帧 delta 大,倍率自然冲上去,符合直觉。
+        distanceX = (cumulatedX / displayDensity) * effectiveZoom * scrollMultiplier;
+        distanceY = (cumulatedY / displayDensity) * effectiveZoom * scrollMultiplier;
 
-        scrollDown = false;
-        scrollUp = false;
-        scrollRight = false;
-        scrollLeft = false;
+        // 惯性尾巴起算:用滚动自己的速度,delta 换算跟手指段同一把尺子
+        feedScrollInertia(scrollMultiplier, effectiveZoom);
 
         cumulatedX = 0;
         cumulatedY = 0;
@@ -636,17 +634,85 @@ public class InputHandlerTouchpad extends InputHandlerGeneric {
         return doScroll(getDragPointerX(e2), getDragPointerY(e2), distanceX, distanceY, meta);
     }
 
-    public boolean doScroll(int x, int y, float distanceX, float distanceY, int meta) {
-        if (distanceY > 0) {
-            scrollDown = true;
-        } else if (distanceY < 0) {
-            scrollUp = true;
-        }
+    /**
+     * 双指滚动本拍的倍率 = 基准 × 加速比。
+     * <p>基准跟"光标移动速度"滑条联动(整体快慢),加速比只跟滑动快慢有关:
+     * 加速比 = min(1 + 速度(px/ms) × K, MAX_RATIO)。
+     */
+    private float computeScrollMultiplier() {
+        float accelRatio = scrollAcceleration.scale(cumulatedX, cumulatedY,
+                1f, SCROLL_ACCEL_K, SCROLL_ACCEL_MAX_RATIO);
+        return scrollBaseMultiplier * accelRatio;
+    }
 
-        if (distanceX > 0) {
-            scrollRight = true;
-        } else if (distanceX < 0) {
-            scrollLeft = true;
+    /**
+     * 等效缩放系数:单屏 = zoomFactor(zoom 越大越灵活,常规行为);
+     * 外屏 = 1.5 * dpiRatio,zoomFactor 显式抵消——dpi 补偿 + 远距离触控板加成,
+     * 且 zoom 越大越收敛(避免看细节时一划出屏)。
+     */
+    private float computeEffectiveZoom() {
+        if (canvas.isOutDisplay()) {
+            int localDpi = (int) (touchpad.getDisplayDensity() * 160f);
+            int extDpi = canvas.getDisplayDpi();
+            float dpiRatio = (extDpi > 0 && localDpi > 0)
+                    ? ((float) localDpi / (float) extDpi) : 1.0f;
+            return 1.5f * dpiRatio;
+        }
+        return canvas.getZoomFactor();
+    }
+
+    /**
+     * 把这一拍的滚动速度喂给惯性,让松手后的尾巴用滚动自己的速度起算,
+     * 而不是单指光标的残留值。
+     *
+     * <p>deltaScale = 手指 px → 远端 wheel delta 的比例,手指段和尾巴必须同一把尺子,
+     * 否则尾巴比手指段慢一截。这里【不含 zoom】:两边的 delta 都要再过 doScroll 里的
+     * /zoom,约掉了(少了它 zoom≠1 时尾巴会慢一截)。
+     */
+    private void feedScrollInertia(float scrollMultiplier, float effectiveZoom) {
+        float density = Math.max(0.01f, displayDensity);
+        recordScrollVelocitySample(
+                scrollAcceleration.signedSpeedX(),
+                scrollAcceleration.signedSpeedY(),
+                (scrollMultiplier * effectiveZoom) / density);
+    }
+
+    /**
+     * 滚动采样门:两次发包之间的最小间隔。
+     *
+     * <p>协议感知:
+     * <ul>
+     *   <li>RDP/VNC 帧率低,30ms 不会到一帧(需要 100ms+),用频繁小 tick 反而不会被
+     *       服务器处理掉。一帧一次(16ms),手指跟手时画面不一跳一跳;服务端 wheel
+     *       本身会累加小 delta,不需要靠大间隔合并。</li>
+     *   <li>NVStream/SPICE 走 SCROLL_SAMPLING_MS(30ms)。NV 内部 60fps,30ms 是合适节拍。</li>
+     * </ul>
+     * 同时保留:高于屏刷的速率下不至于一秒百次发包。
+     */
+    private long computeScrollSamplingMs() {
+        if (isLowFrameRateScrollProtocol()) {
+            return 16;
+        }
+        if (canvas.fpsCounter.getAvgFps() > 0) {
+            return Math.min(1000 / canvas.fpsCounter.getAvgFps(), SCROLL_SAMPLING_MS);
+        }
+        return SCROLL_SAMPLING_MS;
+    }
+
+    /** SSH 本地 scrollback:直接本地画,没有服务器往返 */
+    private boolean isSshLocalScroll() {
+        return pointer instanceof RemoteSshPointer
+                && ((RemoteSshPointer) pointer).isLocalScrollback();
+    }
+
+    public boolean doScroll(int x, int y, float distanceX, float distanceY, int meta) {
+        // 方向:位移大的那个轴决定,水平方向跟 pointer 的左右是反的(历史行为,不动)
+        boolean vertical = Math.abs(distanceY) >= Math.abs(distanceX);
+        if (vertical) {
+            scrollDirection = distanceY > 0 ? SCROLL_DIR_DOWN
+                    : (distanceY < 0 ? SCROLL_DIR_UP : SCROLL_DIR_NONE);
+        } else {
+            scrollDirection = distanceX > 0 ? SCROLL_DIR_LEFT : SCROLL_DIR_RIGHT;
         }
 
         // The direction is just upside down. divide zoom factor to keep the scroll reasonable
@@ -654,21 +720,13 @@ public class InputHandlerTouchpad extends InputHandlerGeneric {
         int newY = (int) (-distanceY / canvas.getZoomFactor());
         int newX = (int) (distanceX / canvas.getZoomFactor());
 
-        if (Math.abs(distanceY) >= Math.abs(distanceX)) {
-            scrollRight = false;
-            scrollLeft = false;
-        } else {
-            scrollUp = false;
-            scrollDown = false;
-        }
-
-        if ((scrollUp || scrollDown) && !immersiveSwipeX) {
+        if (vertical && scrollDirection != SCROLL_DIR_NONE && !immersiveSwipeX) {
             // 双指 / 沉浸边缘 scroll 的 30ms 采样门由 onScroll line 691 统一处理,
             // 这里不重复门。delta 系数 /4 让单 tick 位移减半,与服务器端 wheelDelta 配合。
             sendChunkedScroll(x, y, newY, meta);
         }
 
-        if ((scrollRight || scrollLeft) && !immersiveSwipeY) {
+        if (!vertical && !immersiveSwipeY) {
             // 见上 Y 分支注释
             sendChunkedScroll(x, y, newX, meta);
         }
