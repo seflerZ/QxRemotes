@@ -982,6 +982,8 @@ Below that is where you configure your connection.
     <string name="disable_ime_with_hw_keyboard_hint">When a physical keyboard is attached, the system IME no longer pops up on its own. The keyboard button and edge gestures still show it on demand</string>
     <string name="auto_keyboard_on_text_tap">Auto Keyboard On Text Tap</string>
     <string name="auto_keyboard_on_text_tap_hint">RDP only: when the remote cursor turns into an I-beam, tapping it raises the soft keyboard</string>
+    <string name="right_alt_as_win">Right Alt Sends Win</string>
+    <string name="right_alt_as_win_hint">For ROMs that swallow the hardware Win key: the right Alt key is sent to the remote as the Windows key (VK_LWIN)</string>
 
     <string name="extrakeys_pref">Extra Key Customization</string>
     <string name="pref_extrakeys_vertical_pref">Configs for Vertical Screen</string>

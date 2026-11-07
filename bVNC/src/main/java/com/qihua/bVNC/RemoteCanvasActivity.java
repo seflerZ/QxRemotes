@@ -255,6 +255,8 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
     private boolean customKeyboardEnabled;
     private boolean customKeyboardFloating;
     private boolean disableImeWithHwKeyboard;
+    /** ROM 会截走硬件 Win 键时,把右 Alt 当 Win 发给远端 */
+    private boolean rightAltAsWin;
     private boolean autoKeyboardOnTextTap;
 
     /**
@@ -675,6 +677,8 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
                 this, Constants.disableImeWithHwKeyboard, true);
         autoKeyboardOnTextTap = Utils.querySharedPreferenceBoolean(
                 this, Constants.autoKeyboardOnTextTap, true);
+        rightAltAsWin = Utils.querySharedPreferenceBoolean(
+                this, Constants.rightAltAsWin, false);
         applySoftInputMode();
 
         // the progress dialog can not be displayed in external monitor, so accept it from the touchpad
@@ -1606,6 +1610,8 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
                 this, Constants.disableImeWithHwKeyboard, true);
         autoKeyboardOnTextTap = Utils.querySharedPreferenceBoolean(
                 this, Constants.autoKeyboardOnTextTap, true);
+        rightAltAsWin = Utils.querySharedPreferenceBoolean(
+                this, Constants.rightAltAsWin, false);
         applySoftInputMode();
 
         // Start back tap keyboard helper if enabled
@@ -2192,6 +2198,57 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
         if (highPerfWifiLock != null) {
             highPerfWifiLock.release();
         }
+    }
+
+    /**
+     * 系统(桌面模式/ROM 快捷键)会在 Activity 分发前抢走的键:ESC 被当"返回",
+     * Meta(Win)被当启动器/最近任务。这些键必须在 dispatchKeyEvent 里先截住。
+     */
+    private static boolean isSystemStolenKey(int keyCode) {
+        return keyCode == KeyEvent.KEYCODE_ESCAPE
+                || keyCode == KeyEvent.KEYCODE_META_LEFT
+                || keyCode == KeyEvent.KEYCODE_META_RIGHT;
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        int keyCode = event.getKeyCode();
+        android.view.InputDevice dev = event.getDevice();
+        if (dev != null && !dev.isVirtual()) {
+            Log.i(TAG, "hwkey " + KeyEvent.keyCodeToString(keyCode)
+                    + " action=" + event.getAction()
+                    + " meta=0x" + Integer.toHexString(event.getMetaState())
+                    + " src=0x" + Integer.toHexString(event.getSource()));
+        }
+        if (isSystemStolenKey(keyCode) || keyCode == KeyEvent.KEYCODE_BACK) {
+            Log.i(TAG, "dispatchKeyEvent key=" + KeyEvent.keyCodeToString(keyCode)
+                    + " action=" + event.getAction()
+                    + " source=0x" + Integer.toHexString(event.getSource()));
+        }
+        if (isSystemStolenKey(keyCode) && inputHandler != null && !isCustomKeyboardShowing()) {
+            boolean consumed;
+            if (event.getAction() == KeyEvent.ACTION_UP) {
+                consumed = inputHandler.onKeyUp(keyCode, event);
+            } else {
+                consumed = inputHandler.onKeyDown(keyCode, event);
+            }
+            resetOnScreenKeys(keyCode);
+            if (consumed) {
+                return true;
+            }
+        }
+        // ROM 把硬件 Win 键抢走时,右 Alt 顶上
+        if (rightAltAsWin && keyCode == KeyEvent.KEYCODE_ALT_RIGHT
+                && inputHandler != null && !isCustomKeyboardShowing()) {
+            KeyEvent winEvent = new KeyEvent(event.getAction(), KeyEvent.KEYCODE_META_LEFT);
+            boolean consumed = event.getAction() == KeyEvent.ACTION_UP
+                    ? inputHandler.onKeyUp(KeyEvent.KEYCODE_META_LEFT, winEvent)
+                    : inputHandler.onKeyDown(KeyEvent.KEYCODE_META_LEFT, winEvent);
+            if (consumed) {
+                return true;
+            }
+        }
+        return super.dispatchKeyEvent(event);
     }
 
     @Override

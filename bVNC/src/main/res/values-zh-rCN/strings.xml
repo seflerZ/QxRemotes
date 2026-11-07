@@ -884,6 +884,8 @@ aSPICE对应的功能如下：
     <string name="disable_ime_with_hw_keyboard_hint">检测到外接键盘后，系统输入法不再自动弹出；仍可用键盘按钮或边缘手势手动呼出</string>
     <string name="auto_keyboard_on_text_tap">点输入框自动弹键盘</string>
     <string name="auto_keyboard_on_text_tap_hint">仅 RDP：远端光标变成 I-beam（文本框）时，点击自动呼出软键盘</string>
+    <string name="right_alt_as_win">右 Alt 当作 Win 键</string>
+    <string name="right_alt_as_win_hint">系统会截走硬件 Win 键时用这个绕开：右 Alt 会以 Windows 键（VK_LWIN）发给远端</string>
 
     <string name="extrakeys_pref">软键盘配置</string>
     <string name="pref_extrakeys_vertical_pref">竖屏时显示内容</string>

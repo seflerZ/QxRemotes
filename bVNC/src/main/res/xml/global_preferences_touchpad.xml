@@ -72,5 +72,11 @@
             app:defaultValue="true"
             android:title="@string/auto_keyboard_on_text_tap"
             android:summary="@string/auto_keyboard_on_text_tap_hint"/>
+        <SwitchPreferenceCompat
+            android:defaultValue="false"
+            android:key="rightAltAsWin"
+            app:defaultValue="false"
+            android:title="@string/right_alt_as_win"
+            android:summary="@string/right_alt_as_win_hint"/>
     </PreferenceCategory>
 </PreferenceScreen>
