@@ -52,18 +52,21 @@ public class RemoteNvStreamPointer extends RemotePointer {
 
     @Override
     public void leftButtonDown(int x, int y, int metaState) {
+        notifyButtonDown(x, y);
         pointerMask = MOUSE_BUTTON_LEFT | POINTER_DOWN_MASK;
         sendPointerEvent(x, y, metaState, true);
     }
 
     @Override
     public void middleButtonDown(int x, int y, int metaState) {
+        notifyButtonDown(x, y);
         pointerMask = MOUSE_BUTTON_MIDDLE | POINTER_DOWN_MASK;
         sendPointerEvent(x, y, metaState, true);
     }
 
     @Override
     public void rightButtonDown(int x, int y, int metaState) {
+        notifyButtonDown(x, y);
         pointerMask = MOUSE_BUTTON_RIGHT | POINTER_DOWN_MASK;
         sendPointerEvent(x, y, metaState, true);
     }

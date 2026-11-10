@@ -570,9 +570,6 @@ public class RdpCommunicator extends RemoteConnectable implements RdpKeyboardMap
 
     @Override
     public void OnPointerNew(byte[] pdata, int width, int height, int xPos, int yPos) {
-        // 光标形状分类:判断指针是否落在可输入文本上(I-beam)
-        viewable.onPointerShapeChanged(PointerShape.classify(pdata, width, height, xPos, yPos));
-
         // Reconstruct bitmap headers
         Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
         int offset = 0;
@@ -592,7 +589,19 @@ public class RdpCommunicator extends RemoteConnectable implements RdpKeyboardMap
             }
         }
 
+        // 光标必须先落地:这个回调跑在 FreeRDP 会话线程上,
+        // 后面任何一步抛异常都会让光标永远设不上(看不见)+ 会话线程死(退出卡死)。
         viewable.setSoftCursorBitmap(bitmap, width, height, xPos, yPos);
+
+        // 光标形状分类:判断指针是否落在可输入文本上(I-beam)。
+        // 纯辅助信息,失败绝不能影响上面那条光标通路。
+        int shape = PointerShape.UNKNOWN;
+        try {
+            shape = PointerShape.classify(pdata, width, height, xPos, yPos);
+        } catch (Throwable t) {
+            android.util.Log.w(TAG, "pointer shape classify failed", t);
+        }
+        viewable.onPointerShapeChanged(shape);
     }
 
     @Override

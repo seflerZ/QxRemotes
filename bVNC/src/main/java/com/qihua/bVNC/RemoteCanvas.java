@@ -35,6 +35,7 @@ import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.PorterDuff;
 import android.graphics.Rect;
@@ -72,6 +73,7 @@ import com.qihua.bVNC.connection.ConnectionInitializer;
 import com.qihua.bVNC.connection.ConnectionInitializerFactory;
 import com.qihua.bVNC.connection.ProtocolType;
 import com.qihua.bVNC.connection.SpiceConnectionInitializer;
+import com.qihua.bVNC.draw.ClickRipplePainter;
 import com.qihua.bVNC.draw.DrawWorker;
 import com.qihua.bVNC.dialogs.GetTextFragment;
 import com.qihua.bVNC.input.InputHandler;
@@ -166,12 +168,22 @@ public class RemoteCanvas extends SurfaceView implements Viewable
     private static final long AUTO_KEYBOARD_CONTRADICT_MS = 1000;
 
     private volatile int lastPointerShape = PointerShape.UNKNOWN;
+    /** 形状更新到达时的指针位置(framebuffer 坐标)。形状描述的是这个位置,
+     *  拿它去判定别处的点击就是误判。 */
+    private volatile int shapePosX = -1, shapePosY = -1;
+    /** 待决点击的位置(framebuffer 坐标) */
+    private int tapPosX = -1, tapPosY = -1;
+    /** 形状位置与点击位置允许的偏差(framebuffer 像素) */
+    private static final int SHAPE_POS_TOLERANCE = 16;
     private boolean pointerShapePending = false;
     private boolean autoKeyboardAwaitingInput = false;
     private long autoKeyboardShownAt = 0;
     private int autoKeyboardShownX = 0, autoKeyboardShownY = 0;
     private long suppressAutoKeyboardUntil = 0;
-    private final Runnable pointerShapeDecision = this::decidePointerShape;
+    private final Runnable pointerShapeTimeout = () -> {
+        pointerShapePending = false;
+        decidePointerShape();
+    };
     private final Runnable autoKeyboardWatchdog = this::checkAutoKeyboardFalseTrigger;
 
     private InputHandler inputHandler;
@@ -199,6 +211,8 @@ public class RemoteCanvas extends SurfaceView implements Viewable
     // The remote pointer and keyboard
     public RemotePointer pointer;
     public RemoteKeyboard keyboard;
+    private final ClickRipplePainter ripplePainter =
+            new ClickRipplePainter(getResources().getDisplayMetrics().density);
     public ControllerHandler controller;
     public boolean useFull = false;
     boolean compact = false;
@@ -1127,6 +1141,11 @@ public class RemoteCanvas extends SurfaceView implements Viewable
      * Method that disconnects from the remote server.
      */
     public void closeConnection() {
+        // 断开前先停掉输入侧的惯性尾巴,免得它继续往正在拆的连接里推事件
+        if (inputHandler != null) {
+            inputHandler.cleanup();
+        }
+
         // Last point where the surface is still alive (thumbnail, etc).
         if (connInitializer != null) {
             connInitializer.onBeforeDisconnect();
@@ -1561,6 +1580,49 @@ public class RemoteCanvas extends SurfaceView implements Viewable
         }
     }
 
+    /**
+     * 点击反馈:在 framebuffer 坐标处画水波纹。坐标经 DrawWorker 同一套
+     * 变换(缩放矩阵 + 平移)映射到视图空间,画在 SurfaceView 自己的画布上。
+     */
+    public void showClickRipple(int fbX, int fbY) {
+        final float x, y;
+        Matrix m = scaler != null ? scaler.getMatrix() : null;
+        if (getProtocolType() == ProtocolType.SSH) {
+            // SSH 终端指针本来就用视图坐标
+            x = fbX;
+            y = fbY;
+        } else if (m != null) {
+            float[] pt = {fbX - absoluteXPosition, fbY - absoluteYPosition};
+            m.mapPoints(pt);
+            x = pt[0];
+            y = pt[1];
+        } else {
+            float zoom = getZoomFactor();
+            x = (fbX - absoluteXPosition) * zoom;
+            y = (fbY - absoluteYPosition) * zoom;
+        }
+        ripplePainter.add(x, y);
+        if (handler != null) {
+            handler.removeCallbacks(rippleTicker);
+            handler.post(rippleTicker);
+        }
+    }
+
+    /** 由 DrawWorker 在位图之后调用(此时画布矩阵已重置为单位阵)。 */
+    public void drawClickRipples(Canvas canvas) {
+        ripplePainter.draw(canvas);
+    }
+
+    /** 波纹还在动的时候持续请求重绘,否则动画会停在第一帧。 */
+    private final Runnable rippleTicker = new Runnable() {
+        @Override
+        public void run() {
+            if (ripplePainter.isEmpty() || drawWorker == null) return;
+            repaint(0, 0, Math.max(1, surfaceWidth), Math.max(1, surfaceHeight));
+            handler.postDelayed(this, 16);
+        }
+    };
+
     @Override
     public void setMousePointerPosition(int x, int y) {
         softCursorMove(x, y);
@@ -1662,13 +1724,20 @@ public class RemoteCanvas extends SurfaceView implements Viewable
     @Override
     public void onPointerShapeChanged(int type) {
         lastPointerShape = type;
+        // 记下这个形状对应的是哪个位置:服务端的形状随位置更新一起发,
+        //客户端此刻的指针位置就是它描述的位置。
+        if (pointer != null) {
+            shapePosX = pointer.getX();
+            shapePosY = pointer.getY();
+        }
         long now = SystemClock.uptimeMillis();
         if (handler == null) return;
         handler.post(() -> {
             // 弹起之后形状又变成"非文本":刚才用的是还没到的旧形状,收回键盘
             if (type != PointerShape.TEXT && autoKeyboardShownAt > 0
                     && now - autoKeyboardShownAt <= AUTO_KEYBOARD_CONTRADICT_MS
-                    && cursorStillAtShowPos()) {
+                    && cursorStillAtShowPos()
+                    && shapeMatchesTapPos()) {
                 autoKeyboardShownAt = 0;
                 Log.i(TAG, "形状随后变成非文本,收回自动弹起的键盘");
                 if (activity != null) activity.hideKeyboard();
@@ -1676,7 +1745,7 @@ public class RemoteCanvas extends SurfaceView implements Viewable
             }
             if (!pointerShapePending) return;
             pointerShapePending = false;
-            handler.removeCallbacks(pointerShapeDecision);
+            handler.removeCallbacks(pointerShapeTimeout);
             decidePointerShape();
         });
     }
@@ -1695,13 +1764,33 @@ public class RemoteCanvas extends SurfaceView implements Viewable
             return;
         }
 
+        // 记住点击位置:待决的形状必须描述这个位置,否则就是拿旧形状误判
+        if (pointer != null) {
+            tapPosX = pointer.getX();
+            tapPosY = pointer.getY();
+        }
         pointerShapePending = true;
-        handler.removeCallbacks(pointerShapeDecision);
-        handler.postDelayed(pointerShapeDecision, POINTER_SHAPE_DECIDE_DELAY_MS);
+        handler.removeCallbacks(pointerShapeTimeout);
+        // 超时兜底:形状一直没到(或到的是别的位置)就放弃这次判定,
+        // 同时清掉待决标记,免得几秒后形状姗姗来迟又拿旧点击位置去弹键盘。
+        handler.postDelayed(pointerShapeTimeout, POINTER_SHAPE_DECIDE_DELAY_MS);
+    }
+
+    /** 当前形状是否描述的正是待决点击的那个位置。 */
+    private boolean shapeMatchesTapPos() {
+        if (shapePosX < 0 || tapPosX < 0) return false;
+        return Math.abs(shapePosX - tapPosX) <= SHAPE_POS_TOLERANCE
+                && Math.abs(shapePosY - tapPosY) <= SHAPE_POS_TOLERANCE;
     }
 
     private void decidePointerShape() {
         if (lastPointerShape != PointerShape.TEXT) return;
+        if (!shapeMatchesTapPos()) {
+            // 手上的形状描述的是别的位置(比如上一次停在输入框上),不能拿来判定这次点击
+            Log.d(TAG, "形状位置(" + shapePosX + "," + shapePosY
+                    + ")与点击位置(" + tapPosX + "," + tapPosY + ")不符,不弹键盘");
+            return;
+        }
         if (activity == null || activity.isSoftKeyboardUp()) return;
         activity.showKeyboard();
         autoKeyboardShownAt = SystemClock.uptimeMillis();

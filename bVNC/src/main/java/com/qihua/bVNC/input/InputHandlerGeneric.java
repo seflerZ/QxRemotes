@@ -978,6 +978,8 @@ abstract class InputHandlerGeneric extends MyGestureDectector.SimpleOnGestureLis
 
     @Override
     public void cleanup() {
+        // 断开前先掐掉惯性尾巴,否则它还在往正在拆的连接里灌事件
+        stopInertia();
         // Reset so DirectTouch → Touchpad doesn't reuse stale
         // lastTimestamp / lastDistanceX/Y from the previous session.
         if (pointerAccelerationHelper != null) {

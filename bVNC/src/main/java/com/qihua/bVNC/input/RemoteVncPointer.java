@@ -43,18 +43,21 @@ public class RemoteVncPointer extends RemotePointer {
 
     @Override
     public void leftButtonDown(int x, int y, int metaState) {
+        notifyButtonDown(x, y);
         pointerMask = MOUSE_BUTTON_LEFT;
         sendPointerEvent(x, y, metaState, false);
     }
 
     @Override
     public void middleButtonDown(int x, int y, int metaState) {
+        notifyButtonDown(x, y);
         pointerMask = MOUSE_BUTTON_MIDDLE;
         sendPointerEvent(x, y, metaState, false);
     }
 
     @Override
     public void rightButtonDown(int x, int y, int metaState) {
+        notifyButtonDown(x, y);
         pointerMask = MOUSE_BUTTON_RIGHT;
         sendPointerEvent(x, y, metaState, false);
     }

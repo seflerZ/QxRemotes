@@ -188,6 +188,10 @@ public class DrawWorker {
                 }
             }
 
+            // 波纹画在视图坐标上:先把矩阵重置,画完再无影响
+            glCanvas.setMatrix(null);
+            canvas.drawClickRipples(glCanvas);
+
             lastDraw = System.currentTimeMillis();
         } catch (Exception e) {
             Log.w(TAG, "draw failed", e);

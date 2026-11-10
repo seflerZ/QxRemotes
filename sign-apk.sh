@@ -8,7 +8,9 @@ set -e
 # 配置
 PROJECT_DIR="/home/sefler/remote-desktop-clients"
 APP_MODULE="aRDP-app"
-BUILD_TOOLS_VERSION="30.0.2"
+# 30.0.2 的 zipalign 不支持 -P 16(16KB 未压缩资源对齐),校验会 FAILED
+# 然后 set -e 中止脚本,qidesk 里留下的是旧 APK。
+BUILD_TOOLS_VERSION="36.0.0"
 ANDROID_SDK="${HOME}/Android/Sdk"
 KEYSTORE="${HOME}/.android/debug.keystore"
 KEY_PASS="android"
@@ -83,7 +85,7 @@ build_apk() {
 
     # 执行 zipalign (转换为 16KB 对齐)
     log_info "Running zipalign (16KB alignment)..."
-    "$ZIPALIGN" -v -f -p 16384 "$original_apk" "$aligned_apk"
+    "$ZIPALIGN" -v -f -P 16 4 "$original_apk" "$aligned_apk"
 
     # 签名
     log_info "Signing APK..."

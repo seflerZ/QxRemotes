@@ -113,16 +113,19 @@ public class RemoteSshPointer extends RemotePointer {
 
     @Override
     public void leftButtonDown(int x, int y, int metaState) {
+        notifyButtonDown(x, y);
         sendMouseButton(1, x, y, true, metaState);
     }
 
     @Override
     public void middleButtonDown(int x, int y, int metaState) {
+        notifyButtonDown(x, y);
         sendMouseButton(2, x, y, true, metaState);
     }
 
     @Override
     public void rightButtonDown(int x, int y, int metaState) {
+        notifyButtonDown(x, y);
         sendMouseButton(3, x, y, true, metaState);
     }
 

@@ -1,6 +1,7 @@
 package com.qihua.bVNC.input;
 
 import android.content.Context;
+import android.util.Log;
 import android.os.Handler;
 import android.os.SystemClock;
 import android.view.KeyEvent;
@@ -116,6 +117,20 @@ public abstract class RemotePointer {
         }
 
         return used;
+    }
+
+    /**
+     * 点击反馈:子类在真实鼠标键(非滚轮)按下时调用,在光标处画水波纹。
+     * 纯装饰,绝不能影响鼠标事件的投递 —— 抛异常就吞掉。
+     */
+    protected void notifyButtonDown(int x, int y) {
+        try {
+            if (canvas != null) {
+                canvas.showClickRipple(x, y);
+            }
+        } catch (Throwable t) {
+            Log.w("RemotePointer", "click ripple failed", t);
+        }
     }
 
     abstract public void leftButtonDown(int x, int y, int metaState);
