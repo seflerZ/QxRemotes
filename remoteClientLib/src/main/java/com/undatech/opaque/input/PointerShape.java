@@ -83,7 +83,11 @@ public final class PointerShape {
                 n++;
             }
             rowWidths[y] = n;
-            if (n > 0) filledRows++;
+            if (n > 0) {
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+                filledRows++;
+            }
         }
         if (maxX < 0) return UNKNOWN;
 
