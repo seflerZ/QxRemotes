@@ -258,7 +258,6 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
     /** ROM 会截走硬件 Win 键时,把右 Alt 当 Win 发给远端 */
     private boolean rightAltAsWin;
     private boolean autoKeyboardOnTextTap;
-    private MainThreadWatchdog watchdog;
 
     /**
      * Helper method to get Display object based on Android version and context type
@@ -338,9 +337,6 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
         requestWindowFeature(Window.FEATURE_NO_TITLE);
 
         super.onCreate(icicle);
-
-        watchdog = new MainThreadWatchdog();
-        watchdog.start();
 
         // Bind to the ComputerManager service
         bindService(new Intent(RemoteCanvasActivity.this,
@@ -2184,11 +2180,6 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
     @Override
     protected void onDestroy() {
         super.onDestroy();
-
-        if (watchdog != null) {
-            watchdog.stop();
-            watchdog = null;
-        }
 
         if (backInvokedCallback != null && Build.VERSION.SDK_INT >= 33) {
             getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(backInvokedCallback);
