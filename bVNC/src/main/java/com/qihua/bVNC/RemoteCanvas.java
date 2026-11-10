@@ -1141,8 +1141,11 @@ public class RemoteCanvas extends SurfaceView implements Viewable
      * Method that disconnects from the remote server.
      */
     public void closeConnection() {
-        // 断开前先停掉输入侧的惯性尾巴,免得它继续往正在拆的连接里推事件
-        if (inputHandler != null) {
+        // 断开前先停掉输入侧的惯性尾巴,免得它继续往正在拆的连接里推事件。
+        // 活动 handler 在 Activity 上(canvas.inputHandler 在外屏模式下恒为 null)。
+        if (activity != null) {
+            activity.stopActiveInputHandler();
+        } else if (inputHandler != null) {
             inputHandler.cleanup();
         }
 
@@ -1215,6 +1218,7 @@ public class RemoteCanvas extends SurfaceView implements Viewable
         scaler = null;
         screenMessage = null;
 
+        ripplePainter.clear();
         disposeDrawable();
     }
 
@@ -1581,36 +1585,30 @@ public class RemoteCanvas extends SurfaceView implements Viewable
     }
 
     /**
-     * 点击反馈:在 framebuffer 坐标处画水波纹。坐标经 DrawWorker 同一套
-     * 变换(缩放矩阵 + 平移)映射到视图空间,画在 SurfaceView 自己的画布上。
+     * 点击反馈:在 framebuffer 坐标处画水波纹。坐标存 framebuffer 系,
+     * 绘制时用当前矩阵换算,平移缩放期间波纹不会和画面对不上。
      */
     public void showClickRipple(int fbX, int fbY) {
-        final float x, y;
-        Matrix m = scaler != null ? scaler.getMatrix() : null;
-        if (getProtocolType() == ProtocolType.SSH) {
-            // SSH 终端指针本来就用视图坐标
-            x = fbX;
-            y = fbY;
-        } else if (m != null) {
-            float[] pt = {fbX - absoluteXPosition, fbY - absoluteYPosition};
-            m.mapPoints(pt);
-            x = pt[0];
-            y = pt[1];
-        } else {
-            float zoom = getZoomFactor();
-            x = (fbX - absoluteXPosition) * zoom;
-            y = (fbY - absoluteYPosition) * zoom;
-        }
-        ripplePainter.add(x, y);
+        ripplePainter.add(fbX, fbY);
         if (handler != null) {
             handler.removeCallbacks(rippleTicker);
             handler.post(rippleTicker);
         }
     }
 
-    /** 由 DrawWorker 在位图之后调用(此时画布矩阵已重置为单位阵)。 */
+    /** 由 DrawWorker 在位图之后调用(此时画布矩阵就是位图那套变换)。 */
     public void drawClickRipples(Canvas canvas) {
-        ripplePainter.draw(canvas);
+        ripplePainter.draw(canvas, currentScale());
+    }
+
+    /** 当前缩放系数:用来让波纹在屏幕上大小恒定 */
+    private float currentScale() {
+        Matrix m = scaler != null ? scaler.getMatrix() : null;
+        if (m == null) return 1f;
+        float[] v = new float[9];
+        m.getValues(v);
+        float s = v[Matrix.MSCALE_X];
+        return (s > 0 && !Float.isNaN(s)) ? s : 1f;
     }
 
     /** 波纹还在动的时候持续请求重绘,否则动画会停在第一帧。 */
@@ -1619,7 +1617,8 @@ public class RemoteCanvas extends SurfaceView implements Viewable
         public void run() {
             if (ripplePainter.isEmpty() || drawWorker == null) return;
             repaint(0, 0, Math.max(1, surfaceWidth), Math.max(1, surfaceHeight));
-            handler.postDelayed(this, 16);
+            // 30fps 足够:每次重绘都是整帧上传,别把带宽吃满
+            handler.postDelayed(this, 33);
         }
     };
 

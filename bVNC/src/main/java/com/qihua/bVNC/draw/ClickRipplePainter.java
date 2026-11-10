@@ -7,12 +7,12 @@ import android.os.SystemClock;
 import java.util.ArrayList;
 
 /**
- * 点击水波纹。画在 SurfaceView 自己的画布上(视图坐标),不用窗口层浮层——
- * 浮层盖在 SurfaceView 上会打洞,导致整屏闪烁。
+ * 点击水波纹。画在 SurfaceView 自己的画布上(用与位图相同的坐标系),
+ * 不用窗口层浮层 —— 浮层盖在 SurfaceView 上会打洞,导致整屏闪烁。
  */
 public class ClickRipplePainter {
 
-    private static final long DURATION_MS = 480L;
+    private static final long DURATION_MS = 400L;
     private static final float MAX_RADIUS_DP = 26f;
     private static final float STROKE_DP = 1.8f;
     private static final int WHITE_ALPHA = 150;
@@ -36,20 +36,20 @@ public class ClickRipplePainter {
     private final Paint shadowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint dotPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final float maxRadius;
+    private final float strokeWidthPx;
 
     public ClickRipplePainter(float density) {
         maxRadius = MAX_RADIUS_DP * density;
+        strokeWidthPx = STROKE_DP * density;
         ringPaint.setStyle(Paint.Style.STROKE);
-        ringPaint.setStrokeWidth(STROKE_DP * density);
         ringPaint.setColor(0xFFFFFFFF);
         shadowPaint.setStyle(Paint.Style.STROKE);
-        shadowPaint.setStrokeWidth(STROKE_DP * density * 2.2f);
         shadowPaint.setColor(0xFF000000);
         dotPaint.setStyle(Paint.Style.FILL);
         dotPaint.setColor(0xFFFFFFFF);
     }
 
-    /** 视图坐标。任意线程调用。 */
+    /** framebuffer 坐标。任意线程调用。 */
     public synchronized void add(float x, float y) {
         if (Float.isNaN(x) || Float.isNaN(y) || Float.isInfinite(x) || Float.isInfinite(y)) {
             return;
@@ -75,22 +75,31 @@ public class ClickRipplePainter {
         ripples.clear();
     }
 
-    /** 画在视图坐标系上(DrawWorker 画完位图后把矩阵重置为单位阵)。 */
-    public synchronized void draw(Canvas canvas) {
+    /**
+     * 画在与位图相同的坐标系里(canvas 的 CTM 已经含缩放平移)。
+     * scale 是 CTM 的缩放系数,除掉它让波纹在屏幕上大小恒定。
+     */
+    public synchronized void draw(Canvas canvas, float scale) {
+        if (scale <= 0 || Float.isNaN(scale)) {
+            scale = 1f;
+        }
         long now = SystemClock.uptimeMillis();
-        for (Ripple r : ripples) {
-            float t = (now - r.startMs) / (float) DURATION_MS;
+        float r = maxRadius / scale;
+        for (Ripple ripple : ripples) {
+            float t = (now - ripple.startMs) / (float) DURATION_MS;
             if (t < 0f || t > 1f) continue;
             float ease = 1f - (float) Math.pow(1f - t, 2.2);
-            float radius = maxRadius * (0.22f + 0.78f * ease);
+            float radius = r * (0.22f + 0.78f * ease);
             float fade = (1f - t) * (1f - t);
 
+            shadowPaint.setStrokeWidth(strokeWidthPx * 2.2f / scale);
             shadowPaint.setAlpha((int) (SHADOW_ALPHA * fade));
-            canvas.drawCircle(r.x, r.y, radius, shadowPaint);
+            canvas.drawCircle(ripple.x, ripple.y, radius, shadowPaint);
+            ringPaint.setStrokeWidth(strokeWidthPx / scale);
             ringPaint.setAlpha((int) (WHITE_ALPHA * fade));
-            canvas.drawCircle(r.x, r.y, radius, ringPaint);
+            canvas.drawCircle(ripple.x, ripple.y, radius, ringPaint);
             dotPaint.setAlpha((int) (WHITE_ALPHA * fade * 0.8f));
-            canvas.drawCircle(r.x, r.y, maxRadius * 0.16f * (1f - ease * 0.6f), dotPaint);
+            canvas.drawCircle(ripple.x, ripple.y, r * 0.16f * (1f - ease * 0.6f), dotPaint);
         }
         prune(now);
     }

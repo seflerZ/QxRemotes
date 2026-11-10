@@ -142,8 +142,9 @@ public final class PointerShape {
     /** 形状指纹:位图内容 + 尺寸 + 热点。同一个形状 → 同一个指纹。 */
     private static int fingerprint(byte[] argb, int width, int height, int hotspotX, int hotspotY) {
         int h = width * 31 + height * 17 + hotspotX * 7 + hotspotY;
-        // 只取 alpha 通道(形状的轮廓),步长采样避免整图 hash 的开销
-        for (int i = 3; i < argb.length; i += 64) {
+        // 全部 alpha 字节都算进去:步长采样会撞指纹,而缓存是 static 永不失效,
+        // 一次碰撞就会永久把形状认错(比如把箭头当成 I-beam)。
+        for (int i = 3; i < argb.length; i += 4) {
             h = h * 31 + (argb[i] & 0xFF);
         }
         return h;

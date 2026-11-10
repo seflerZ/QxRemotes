@@ -181,15 +181,17 @@ public class DrawWorker {
             canvas.bitmapData.drawable.draw(glCanvas);
 
             if (canvas.fpsCounter != null) {
-                canvas.fpsCounter.finish(task.getInTimeMs());
+                // 只有真正计数的帧才结算延迟,波纹/指针刷新会污染统计
+                if (task.isCount()) {
+                    canvas.fpsCounter.finish(task.getInTimeMs());
+                }
                 if (showFps) {
                     canvas.fpsCounter.drawFps(glCanvas);
                     canvas.fpsCounter.drawDebugMsg(glCanvas, task.getDebugMsg());
                 }
             }
 
-            // 波纹画在视图坐标上:先把矩阵重置,画完再无影响
-            glCanvas.setMatrix(null);
+            // 波纹与位图同一坐标系(canvas 的 CTM 已含缩放平移)
             canvas.drawClickRipples(glCanvas);
 
             lastDraw = System.currentTimeMillis();

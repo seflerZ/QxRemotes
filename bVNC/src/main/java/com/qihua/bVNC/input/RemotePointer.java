@@ -25,7 +25,8 @@ public abstract class RemotePointer {
     /**
      * Indicates where the mouse pointer is located.
      */
-    protected int pointerX, pointerY;
+    /** 跨线程读(会话线程读、输入线程写),必须 volatile,否则读到陈旧位置 */
+    protected volatile int pointerX, pointerY;
     protected int hotspotX, hotspotY;
     protected boolean relativeEvents = false;
     protected float sensitivity = DEFAULT_SENSITIVITY;

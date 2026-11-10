@@ -857,6 +857,7 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
         }
         ((RemoteCanvasHandler) handler).setConnection(connection);
         canvas.initializeCanvas(connection, setModes, hideKeyboardAndExtraKeys);
+        applySoftInputAdjustMode();
 
         touchpad.setInputHandler(getInputHandlerById(R.id.itemInputTouchpad));
         // 显示前确保 canvas 持有即将显示的(touchpad 的)进度对话框。外屏模式下 canvas 与
@@ -2596,6 +2597,28 @@ public class RemoteCanvasActivity extends AppCompatActivity implements OnKeyList
         getWindow().setSoftInputMode(mode);
         if (suppress && softKeyboardUp && !customKeyboardEnabled) {
             hideKeyboard();
+        }
+    }
+
+    /**
+     * IME 弹出时要不要 resize 窗口。
+     * SSH 终端的网格要随键盘缩小,否则底部几行被输入法盖住;
+     * 其余协议用 adjustNothing —— resize 会重建 SurfaceView,表现为整屏闪一下。
+     */
+    private void applySoftInputAdjustMode() {
+        boolean ssh = canvas != null && canvas.getProtocolType() == ProtocolType.SSH;
+        int mode = getWindow().getAttributes().softInputMode
+                & ~WindowManager.LayoutParams.SOFT_INPUT_MASK_ADJUST;
+        mode |= ssh
+                ? WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+                : WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING;
+        getWindow().setSoftInputMode(mode);
+    }
+
+    /** 断开前掐掉当前活动的输入 handler(惯性尾巴会往正在拆的连接里灌事件) */
+    public void stopActiveInputHandler() {
+        if (inputHandler != null) {
+            inputHandler.cleanup();
         }
     }
 
