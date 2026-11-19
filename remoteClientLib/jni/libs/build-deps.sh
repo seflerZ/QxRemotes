@@ -32,6 +32,54 @@ expand() {
     echo "${!1}"
 }
 
+# 把 deps 下的第三方仓库切到 build-deps.conf 里记录的分支。
+# 版本是分支名（各 fork 的集成分支）；也接受 40 位 SHA，按 detached 钉。
+# reset --hard 照旧（脚本的本意就是每次从 HEAD 重置代码），但先打两条警告：
+#   1. 工作区有未提交的改动 —— 会被 reset 掉，先看一眼。
+#   2. 本地分支和 origin 不同步 —— 未推送的提交重装 deps 后就没了，
+#      这次编出来的版本不可复现。
+# $1 = 仓库目录（相对当前目录）  $2 = 版本  $3 = 名字  $4 = 允许脏的文件（可选）
+pin_dep_repo() {
+    local dir="$1" ver="$2" label="$3" allow_dirty="${4:-}"
+    local dirty=""
+    pushd "${dir}" >/dev/null
+    if [ -n "${allow_dirty}" ]; then
+        dirty="$(git status --porcelain --untracked-files=no --ignore-submodules=all -- . ':!'"${allow_dirty}")"
+    else
+        dirty="$(git status --porcelain --untracked-files=no --ignore-submodules=all)"
+    fi
+    if [ -n "${dirty}" ]; then
+        echo "WARNING: ${label} 有未提交的本地改动，reset --hard 会丢弃："
+        echo "${dirty}" | sed 's/^/    /'
+    fi
+    git fetch --tags --prune origin
+    if echo "${ver}" | grep -qE '^[0-9a-f]{40}$'; then
+        if ! git cat-file -e "${ver}^{commit}" 2>/dev/null; then
+            git fetch origin "${ver}" || true
+        fi
+        if ! git cat-file -e "${ver}^{commit}" 2>/dev/null; then
+            echo "ERROR: ${label} 找不到 commit ${ver} —— 该 commit 很可能还没推到远端。"
+            popd >/dev/null
+            return 1
+        fi
+        git checkout --detach "${ver}"
+        git reset --hard "${ver}"
+    else
+        git checkout "${ver}"
+        if git rev-parse --verify --quiet "origin/${ver}" >/dev/null &&
+           [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/${ver})" ]; then
+            echo "WARNING: ${label} 的本地 ${ver} 和 origin/${ver} 不一致，有未推送的提交："
+            git log --oneline "origin/${ver}..HEAD" | sed 's/^/    /'
+            echo "         没推送的提交重装 deps 后就没了，这次编出来的版本不可复现。"
+        fi
+        git reset --hard
+    fi
+    # 子模块必须在 checkout 之后更新：不同 commit 指向不同的子模块指针，
+    # 先更新会拿旧指针的代码去编译。
+    git submodule update --init --recursive
+    popd >/dev/null
+}
+
 tarpath() {
     # Print the tarball path for the specified package
     # $1  = the name of the program
@@ -562,10 +610,7 @@ build_moonlight() {
             git clone ${moonlight_url}
         fi
         pushd ${moonlight_build}
-        git submodule update --init --recursive
-        git fetch
-        git checkout ${moonlight_ver}
-        git reset --hard
+        pin_dep_repo "." "${moonlight_ver}" "moonlight-android"
         popd
         # Build: invoke ndk-build from moonlight's own jni/ directory so
         # the project's Android.mk (all-subdir-makefiles) pulls in both
@@ -620,9 +665,7 @@ build_freerdp() {
             git clone ${freerdp_url}
         fi
         pushd ${freerdp_build}
-        git fetch
-        git checkout ${freerdp_ver}
-        git reset --hard
+        pin_dep_repo "." "${freerdp_ver}" "FreeRDP" "scripts/android-build.conf"
         # Patch the config
         sed -i -e 's/8ffbe944e74043d0d3fb53d4a2a14c94de71f58dbea6a06d0dc92369542958ea/558544ad358283a7ab2930d69a9ceddf913f4a51ee9bf1bfb9e377322af81a69/'\
                -e 's/d7939ce614029cdff0b6c20f0e2e5703158a489a72b2507b8bd51bf8c8fd10ca/cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8/'\
@@ -671,8 +714,7 @@ build_vterm() {
         git clone ${libvterm_url} ${libvterm_build}
     fi
     pushd ${libvterm_build}
-    git checkout ${libvterm_ver}
-    git reset --hard
+    pin_dep_repo "." "${libvterm_ver}" "libvterm"
     popd
     # Build: invoke the project's ndk-build from remoteClientLib/
     # so the dispatcher jni/Android.mk includes libs/vterm_jni/Android.mk
