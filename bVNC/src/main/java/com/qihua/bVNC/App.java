@@ -227,20 +227,9 @@ public class App extends MultiDexApplication {
     private void applyThemeModeFromPrefs() {
         String mode = Utils.querySharedPreferenceString(
                 getApplicationContext(), Constants.themeModeType, "auto");
-        int appCompatMode;
-        switch (mode) {
-            case "light":
-                appCompatMode = AppCompatDelegate.MODE_NIGHT_NO;
-                break;
-            case "night":
-                appCompatMode = AppCompatDelegate.MODE_NIGHT_YES;
-                break;
-            default:
-                appCompatMode = AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM;
-                break;
-        }
-        AppCompatDelegate.setDefaultNightMode(appCompatMode);
-        NightMode.setAppNightMode(mode);
+        NightMode nightMode = NightMode.modeOf(mode, NightMode.AUTO);
+        AppCompatDelegate.setDefaultNightMode(nightMode.getMode());
+        NightMode.setAppNightMode(nightMode.getName());
     }
 
     public Database getDatabase() {

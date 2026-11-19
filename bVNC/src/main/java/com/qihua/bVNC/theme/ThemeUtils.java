@@ -5,6 +5,7 @@ import android.content.Context;
 import android.content.res.Configuration;
 import android.content.res.TypedArray;
 
+import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 
 public class ThemeUtils {
@@ -24,17 +25,17 @@ public class ThemeUtils {
 
     }
 
-    /** Will return true if mode is set to {@link NightMode#TRUE}, otherwise will return true if
-     * mode is set to {@link NightMode#SYSTEM} and night mode is enabled by system. */
-    public static boolean shouldEnableDarkTheme(Context context, String name) {
-        if (NightMode.TRUE.getName().equals(name))
-            return true;
-        else if (NightMode.FALSE.getName().equals(name))
-            return false;
-        else if (NightMode.SYSTEM.getName().equals(name)) {
-            return isNightModeEnabled(context);
-        } else {
-            return false;
+    /** Will return true if mode is set to {@link NightMode#NIGHT}, otherwise will return true if
+     * mode is set to {@link NightMode#AUTO} and night mode is enabled by system. */
+    public static boolean shouldEnableDarkTheme(Context context, @Nullable String name) {
+        switch (NightMode.modeOf(name, NightMode.LIGHT)) {
+            case NIGHT:
+                return true;
+            case AUTO:
+                return isNightModeEnabled(context);
+            case LIGHT:
+            default:
+                return false;
         }
     }
 
