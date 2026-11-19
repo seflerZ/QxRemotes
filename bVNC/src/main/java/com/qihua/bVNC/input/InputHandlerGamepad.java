@@ -19,7 +19,6 @@
 
 package com.qihua.bVNC.input;
 
-import android.os.Build;
 import android.os.Handler;
 import android.view.MotionEvent;
 import android.view.View;
@@ -61,9 +60,9 @@ public class InputHandlerGamepad extends InputHandlerGeneric {
     private Handler repeatHandler;
     private Runnable repeatRunnable;
 
-    // Last repeat time
-    private long lastRepeatTime = 0;
-    private static final long REPEAT_INTERVAL_MS = 50;
+    private static final long REPEAT_INTERVAL_MS = 16;
+    private boolean repeatActive = false;
+    private long lastNeutralSendTime = 0;
 
     // RemoteGamepad instance for handling gamepad commands (completely abstracted)
     private RemoteGamepad remoteGamepad;
@@ -81,10 +80,11 @@ public class InputHandlerGamepad extends InputHandlerGeneric {
         repeatRunnable = new Runnable() {
             @Override
             public void run() {
-                if (lastRepeatTime > 0 && System.currentTimeMillis() - lastRepeatTime >= REPEAT_INTERVAL_MS) {
-                    sendAnalogStickEvents();
-                    repeatHandler.postDelayed(this, REPEAT_INTERVAL_MS);
+                if (!repeatActive) {
+                    return;
                 }
+                sendAnalogStickEvents();
+                repeatHandler.postDelayed(this, REPEAT_INTERVAL_MS);
             }
         };
 
@@ -454,12 +454,7 @@ public class InputHandlerGamepad extends InputHandlerGeneric {
         sendBothSticksData();
 
         // Start repeat for continuous input
-        lastRepeatTime = System.currentTimeMillis();
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            if (!repeatHandler.hasCallbacks(repeatRunnable)) {
-                repeatHandler.post(repeatRunnable);
-            }
-        }
+        startRepeatEvents();
 
         // Update visual
         if (isLeft) {
@@ -472,7 +467,9 @@ public class InputHandlerGamepad extends InputHandlerGeneric {
     private void sendAnalogStickEvents() {
         if (leftStickPointerId == -1 && rightStickPointerId == -1) {
             // If no active sticks, just send neutral position occasionally to maintain connection
-            if (System.currentTimeMillis() - lastRepeatTime > 1000) {
+            long now = System.currentTimeMillis();
+            if (now - lastNeutralSendTime > 1000) {
+                lastNeutralSendTime = now;
                 sendBothSticksData();
             }
             return;
@@ -489,8 +486,15 @@ public class InputHandlerGamepad extends InputHandlerGeneric {
         }
     }
 
+    private void startRepeatEvents() {
+        repeatActive = true;
+        if (!repeatHandler.hasCallbacks(repeatRunnable)) {
+            repeatHandler.postDelayed(repeatRunnable, REPEAT_INTERVAL_MS);
+        }
+    }
+
     private void stopRepeatEvents() {
-        lastRepeatTime = 0;
+        repeatActive = false;
         repeatHandler.removeCallbacks(repeatRunnable);
     }
 

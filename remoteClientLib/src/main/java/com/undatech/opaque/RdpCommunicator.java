@@ -6,7 +6,6 @@ import android.graphics.Rect;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
-import android.os.SystemClock;
 import android.util.Log;
 
 import com.freerdp.freerdpcore.application.GlobalApp;
@@ -289,9 +288,6 @@ public class RdpCommunicator extends RemoteConnectable implements RdpKeyboardMap
 
         LibFreeRDP.sendKeyEvent(session.getInstance(), virtualKeyCode, down);
 
-        // will crash if too fast key sending, possibly FreeRDP bugs
-        SystemClock.sleep(20);
-
 //        if (!down) {
 //            sendModifierKeys(false);
 //        }
@@ -312,9 +308,6 @@ public class RdpCommunicator extends RemoteConnectable implements RdpKeyboardMap
 //        GeneralUtils.debugLog(this.debugLogging, TAG, "processUnicodeKey: " +
 //                "Sending unicode key: " + unicodeKey + ", down: " + down + ", metaState: " + metaState);
         LibFreeRDP.sendUnicodeKeyEvent(session.getInstance(), unicodeKey, down);
-
-        // will crash if too fast key sending, possibly FreeRDP bugs
-        SystemClock.sleep(20);
 
 //        if (!down && !suppressMetaState) {
 //            sendModifierKeys(false);

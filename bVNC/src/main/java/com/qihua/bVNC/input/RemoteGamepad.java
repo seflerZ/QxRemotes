@@ -26,6 +26,12 @@ public abstract class RemoteGamepad {
     // 模拟触发器值
     protected byte leftTriggerValue = 0;
     protected byte rightTriggerValue = 0;
+
+    // 模拟摇杆当前值 (-1.0 到 1.0)
+    protected float leftStickX = 0;
+    protected float leftStickY = 0;
+    protected float rightStickX = 0;
+    protected float rightStickY = 0;
     
     public RemoteGamepad(RemoteCanvas canvas, Handler handler,
                          boolean debugLogging) {
@@ -124,5 +130,15 @@ public abstract class RemoteGamepad {
      */
     public void setRightTriggerValue(byte value) {
         this.rightTriggerValue = value;
+    }
+
+    /**
+     * 记录摇杆当前值，供按钮事件复用（按钮包必须带上当前摇杆位置）
+     */
+    protected void updateStickState(float lx, float ly, float rx, float ry) {
+        this.leftStickX = lx;
+        this.leftStickY = ly;
+        this.rightStickX = rx;
+        this.rightStickY = ry;
     }
 }

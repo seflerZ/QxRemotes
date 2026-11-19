@@ -127,6 +127,7 @@ public class NvStreamRemoteGamepad extends RemoteGamepad {
         }
         
         // 发送控制器输入，包含摇杆数据和当前按钮状态
+        updateStickState(leftStickX, leftStickY, rightStickX, rightStickY);
         MoonBridge.sendMultiControllerInput(
             (short) 0,  // 控制器编号
             (short) 1,  // 激活的游戏手柄掩码（第一个游戏手柄）
@@ -139,7 +140,7 @@ public class NvStreamRemoteGamepad extends RemoteGamepad {
             (short) (rightStickY * 32767)   // 右摇杆Y (-32767到32767)
         );
     }
-    
+
     /**
      * 使用当前状态发送完整的控制器输入
      */
@@ -151,10 +152,10 @@ public class NvStreamRemoteGamepad extends RemoteGamepad {
             getCurrentButtonFlags(),     // 当前按钮标志位
             getLeftTriggerValue(),       // 左触发器值
             getRightTriggerValue(),      // 右触发器值
-            (short) 0,  // 左摇杆X（零值，因为这是按钮事件）
-            (short) 0,  // 左摇杆Y（零值）
-            (short) 0,  // 右摇杆X（零值）
-            (short) 0   // 右摇杆Y（零值）
+            (short) (leftStickX * 32767),  // 左摇杆X
+            (short) (leftStickY * 32767),  // 左摇杆Y
+            (short) (rightStickX * 32767), // 右摇杆X
+            (short) (rightStickY * 32767)  // 右摇杆Y
         );
     }
     
