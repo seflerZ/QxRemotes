@@ -3,6 +3,7 @@ apply plugin: 'kotlin-android'
 
 android {
     compileSdkVersion compileApi
+    compileSdkMinor compileMinor
 
     namespace 'com.undatech.remoteClientUi'
 

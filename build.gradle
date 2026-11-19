@@ -27,4 +27,6 @@ ext {
     compileApi = properties.get('COMPILE_API', 36)
     targetApi = properties.get('TARGET_API', 36)
     minApi = properties.get('MIN_API', 26)
+    // API 36.1(Android 16.1)次版本: 需要 android-36.1 平台,AGP 8.13+ 支持 compileSdkMinor
+    compileMinor = properties.get('COMPILE_MINOR', 1)
 }

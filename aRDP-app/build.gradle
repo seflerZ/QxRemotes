@@ -12,6 +12,7 @@ android {
 
 
     compileSdkVersion compileApi
+    compileSdkMinor compileMinor
 
     namespace 'com.qihua.rmt'
 
