@@ -162,7 +162,9 @@ public class LabeledImageApapter extends BaseAdapter {
             imageView.setImageResource(R.drawable.rdp_connection);
             imageView.setScaleType(ImageView.ScaleType.CENTER);
         } else {
-            String key = screenshotFilePath + "#" + width;
+            // mtime 拼进 key:退出连接后截图文件会被重写,不能一直命中旧缓存
+            String key = screenshotFilePath + "#" + width + "#"
+                    + new java.io.File(screenshotFilePath).lastModified();
             imageView.setTag(key);
             Bitmap gridImage = thumbCache.get(key);
             if (gridImage != null) {

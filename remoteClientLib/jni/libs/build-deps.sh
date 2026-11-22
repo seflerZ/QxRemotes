@@ -542,6 +542,7 @@ build() {
     do
         build_one "$package"
     done
+    verify_jnilibs
 }
 
 clean() {
@@ -641,9 +642,47 @@ build_moonlight() {
         jnilibs="${basedir}/../../../src/main/jniLibs/arm64-v8a"
         mkdir -p "${jnilibs}"
         cp -f "${moonlight_so}" "${jnilibs}/libmoonlight-core.so"
+        # 上面那次 ndk-build 的 setup-app.mk 会 rm -f 整个 jniLibs 目录，把
+        # 之前 build_vterm 拷进去的 libvterm*.so 一起冲掉（顺序一变就会中招，
+        # APK 装到设备上连接时报 "libvterm.so not found"）。从 ndk-build 的
+        # 默认输出目录补回来。
+        restore_vterm_jnilibs "${jnilibs}"
     fi
     popd
     touch MOONLIGHT_BUILT
+    verify_jnilibs
+}
+
+# 把 libs/<ABI>/ 里现成的 libvterm*.so 补进 src/main/jniLibs/（若已构建过）。
+restore_vterm_jnilibs() {
+    local jnilibs="$1"
+    local root="${jnilibs%/src/main/jniLibs/arm64-v8a}"
+    local f
+    for f in libvterm.so libvterm_jni.so; do
+        if [ -f "${root}/libs/arm64-v8a/${f}" ]; then
+            cp -f "${root}/libs/arm64-v8a/${f}" "${jnilibs}/${f}"
+        fi
+    done
+    return 0
+}
+
+# AGP 只打包 src/main/jniLibs/<ABI>/，缺一个就是运行期 UnsatisfiedLinkError。
+verify_jnilibs() {
+    local jnilibs missing="" f
+    jnilibs="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")/../../.." && pwd)/src/main/jniLibs/arm64-v8a"
+    for f in libvterm.so libvterm_jni.so libmoonlight-core.so; do
+        if [ ! -f "${jnilibs}/${f}" ]; then
+            missing="${missing} ${f}"
+        fi
+    done
+    if [ -n "${missing}" ]; then
+        echo ; echo
+        echo "WARNING: ${jnilibs} 缺少:${missing}"
+        echo "         AGP 只打包这个目录，缺的 .so 会让运行期报 UnsatisfiedLinkError。"
+        echo "         重新跑 ./build-deps.sh build_vterm / build_moonlight 补上。"
+        echo
+    fi
+    return 0
 }
 
 build_freerdp() {
@@ -741,6 +780,7 @@ build_vterm() {
     popd
     popd
     touch VTERM_BUILT
+    verify_jnilibs
 }
 
 # Set up error handling

@@ -24,6 +24,7 @@ import com.qihua.bVNC.ssh.SshShellChannel;
 import com.qihua.bVNC.ssh.SshTerminalRenderer;
 import com.qihua.bVNC.ssh.SshTerminalScaling;
 import com.qihua.bVNC.ssh.libvterm.SshTermStateMachine;
+import com.qihua.bVNC.util.SmartResolutionUtils;
 import com.trilead.ssh2.Session;
 import com.undatech.opaque.Connection;
 import com.undatech.opaque.DrawTask;
@@ -187,7 +188,7 @@ public class SshConnectionInitializer extends ConnectionInitializer {
     @Override
     public void initialize(RemoteCanvas canvas) throws Exception {
         this.canvas = canvas;
-        this.density = ctx.getResources().getDisplayMetrics().density;
+        this.density = computeDensity(currentDisplayMetrics());
         Log.i(TAG, "initialize: Phase 2 — TermSession + SshShellChannel + trilead.");
 
         int fbW = computeFbW();
@@ -626,6 +627,46 @@ public class SshConnectionInitializer extends ConnectionInitializer {
                 + ", resizing SSH framebuffer (keeping SSH session alive)");
 
         resizeSSHFramebuffer();
+        // 字号跟着新显示器的 PPI 走（外接屏接上/拔掉都会走到这里）
+        applyRendererDensity(computeDensity(metrics));
+    }
+
+    /**
+     * 当前显示器的有效密度：density × PPI 分档系数，与 RDP 智能分辨率同一套。
+     * SSH 的"分辨率"就是字号 / 列数，高 PPI 屏不放大字会小到看不清。
+     */
+    private float computeDensity(DisplayMetrics metrics) {
+        if (metrics == null) metrics = ctx.getResources().getDisplayMetrics();
+        float scale = SmartResolutionUtils.getFontScale(metrics);
+        float d = metrics.density * scale;
+        Log.i(TAG, "computeDensity: density=" + metrics.density + " ppiScale=" + scale
+                + " -> effectiveDensity=" + d);
+        return d;
+    }
+
+    /** Metrics of the display this canvas currently lives on. */
+    private DisplayMetrics currentDisplayMetrics() {
+        Display display = canvas != null ? canvas.getDisplay() : null;
+        if (display != null) {
+            DisplayMetrics metrics = new DisplayMetrics();
+            display.getMetrics(metrics);
+            return metrics;
+        }
+        return ctx.getResources().getDisplayMetrics();
+    }
+
+    /** Rebuild glyph metrics on the paint thread — renderInto owns the renderer. */
+    private void applyRendererDensity(float newDensity) {
+        Handler h = paintHandler;
+        if (h == null) {
+            if (renderer != null) renderer.updateDensity(newDensity);
+            return;
+        }
+        h.post(() -> {
+            if (renderer == null) return;
+            renderer.updateDensity(newDensity);
+            postPaintToBackground();
+        });
     }
 
     /** Open TermSession at current mbitmap size — this IS the first-frame trigger. */

@@ -51,11 +51,13 @@ public class Constants {
     public static final float SSH_SMART_RESOLUTION_FACTOR = 1.0f;
 
     /**
-     * Phase 0: SSH monospace text size, in density-independent pixels.
-     * Multiplying by the display's density gives the same physical glyph
-     * size on cover vs. main foldable displays (which have very different
-     * PPIs). Effective on-screen size is then further scaled by
-     * AbstractScaling's fit-center based on SSH_SMART_RESOLUTION_FACTOR.
+     * Base SSH monospace text size, in density-independent pixels.
+     * Effective size is {@code SSH_FONT_SIZE_DP × density × getFontScale()}.
+     * Phones need no extra factor (density already encodes physical size);
+     * desktop-class external displays (Android pins them to densityDpi 160)
+     * get {@link com.qihua.bVNC.util.SmartResolutionUtils#DESKTOP_FONT_SCALE}.
+     * The character grid is the SSH "resolution": it derives from font size
+     * + viewport, not from anything configured remotely.
      */
     public static final float SSH_FONT_SIZE_DP = 14f;
     // H_THRESH needs to be < than TOP_MARGIN to avoid pan following pointer unnecessarily.

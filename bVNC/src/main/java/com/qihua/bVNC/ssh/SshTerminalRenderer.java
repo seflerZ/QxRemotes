@@ -49,7 +49,8 @@ public class SshTerminalRenderer {
         }
     };
 
-    private final float density;
+    /** Effective density (density × PPI 系数). Rebuilds glyph metrics on change. */
+    private volatile float density;
     /** Current transport. Swapped on reconnect (see {@link #rebind}). */
     private SshShellChannel channel;
     /** Paint callback handed to {@link #open}. */
@@ -661,6 +662,29 @@ public class SshTerminalRenderer {
             Log.w(TAG, "stateMachine.destroy failed", t);
         }
         channel.close();
+    }
+
+    /**
+     * Rebuild the character metrics after the density (or its PPI factor)
+     * changes — e.g. the activity moved to an external display. Must run on
+     * the paint thread: {@code renderInto} reads {@link #canvasRenderer}.
+     * The grid is re-derived on the next frame and the new size is pushed
+     * to the remote PTY via {@link GridSizeListener}.
+     */
+    public void updateDensity(float newDensity) {
+        if (newDensity <= 0f || Math.abs(newDensity - density) < 0.001f) return;
+        density = newDensity;
+        if (closed || canvasRenderer == null) return;
+        canvasRenderer = new VTermCanvasRenderer(fontSizePx(), paddingPx(), terminalTypeface, ctx);
+        if (stateMachine != null) stateMachine.setCellHeight(canvasRenderer.charHeight);
+        // 字号变了网格一定变，别让 renderInto 当成 IME pan 拒绝掉
+        gridGrowPending = true;
+        currentCols = -1;
+        currentRows = -1;
+        haveLastFrame = false;
+        fastScrollDirty = true;
+        Log.i(TAG, "updateDensity: density=" + density + " fontSizePx=" + fontSizePx()
+                + " charW=" + canvasRenderer.charWidth + " charH=" + canvasRenderer.charHeight);
     }
 
     private int fontSizePx() {

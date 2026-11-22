@@ -100,6 +100,27 @@ public class SmartResolutionUtils {
     }
     
     /**
+     * 终端字号的显示器放大系数（SSH 的"分辨率"就是字号 + 列数）。
+     *
+     * <p>手机/平板不需要放大：{@code density} 已经反映了物理尺寸，14dp 就是
+     * 屏幕上正常的字，再按 PPI 叠一层就是双重放大，会明显过大。
+     *
+     * <p>桌面级外接显示器（HDMI/TV/桌面模式）才需要：Android 对它多半固定报
+     * {@code densityDpi=160}，dp 与像素 1:1，加上观看距离远，2K/4K 面板上
+     * 14px 的字会小到看不清。
+     *
+     * @param metrics 目标显示器的 DisplayMetrics
+     * @return 手机 1.0；桌面级外接屏 {@link #DESKTOP_FONT_SCALE}
+     */
+    public static float getFontScale(DisplayMetrics metrics) {
+        if (metrics == null) return 1f;
+        return metrics.density <= 1.2f ? DESKTOP_FONT_SCALE : 1f;
+    }
+
+    /** 桌面级外接显示器的字号放大系数（LG QHD 上实测 1.75 合适）。 */
+    public static final float DESKTOP_FONT_SCALE = 1.75f;
+
+    /**
      * 根据PPI值确定缩放系数
      * PPI越高，系数越大，远程桌面分辨率越高
      */
