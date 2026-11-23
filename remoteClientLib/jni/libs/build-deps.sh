@@ -669,7 +669,8 @@ restore_vterm_jnilibs() {
 # AGP 只打包 src/main/jniLibs/<ABI>/，缺一个就是运行期 UnsatisfiedLinkError。
 verify_jnilibs() {
     local jnilibs missing="" f
-    jnilibs="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")/../../.." && pwd)/src/main/jniLibs/arm64-v8a"
+    # 脚本在 remoteClientLib/jni/libs/，上两级即 remoteClientLib
+    jnilibs="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")/../.." && pwd)/src/main/jniLibs/arm64-v8a"
     for f in libvterm.so libvterm_jni.so libmoonlight-core.so; do
         if [ ! -f "${jnilibs}/${f}" ]; then
             missing="${missing} ${f}"
